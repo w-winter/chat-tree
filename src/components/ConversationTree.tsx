@@ -3,6 +3,7 @@ import { ReactFlow, addEdge, Connection, MiniMap, Controls, Background, Backgrou
 import { ContextMenu } from './ContextMenu';
 import { LoadingSpinner, ErrorState } from "./LoadingStates";
 import { useConversationTree } from '../hooks/useConversationTree';
+import { useThemePreference } from '../hooks/useThemePreference';
 import { createContextMenuHandler, checkNodes, checkNodesClaude, createClaudeContextMenuHandler } from '../utils/conversationTreeHandlers';
 import { createNodesInOrder } from '../utils/nodeCreation';
 import { createClaudeNodesInOrder} from '../utils/claudeNodeCreation';
@@ -53,6 +54,8 @@ const ConversationTree = () => {
   const [showSearch, setShowSearch] = useState(false);
   const [lastActiveChildMap, setLastActiveChildMap] = useState<Record<string, string>>({});
   const [previousPathNodeIds, setPreviousPathNodeIds] = useState<Set<string>>(new Set());
+
+  const { preference, resolvedTheme, isDark, cyclePreference } = useThemePreference();
 
   // Create nodes and edges when conversation data changes
   useEffect(() => {
@@ -282,24 +285,62 @@ const ConversationTree = () => {
 
   return (
     <div className="w-full h-full" style={{ height: '100%', width: '100%' }}>
-      <div className="absolute top-4 right-4 flex items-center bg-white rounded-lg shadow-lg divide-x divide-gray-200 z-10">
+      <div className="absolute top-4 right-4 flex items-center bg-white dark:bg-gray-800 rounded-lg shadow-lg divide-x divide-gray-200 dark:divide-gray-700 z-10">
         <button
           onClick={() => setShowSearch(true)}
-          className="p-2.5 hover:bg-gray-50 transition-colors rounded-l-lg group"
+          className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors rounded-l-lg group"
           title="Search messages (⌘+K)"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600 group-hover:text-gray-800" viewBox="0 0 20 20" fill="currentColor">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-gray-100" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
           </svg>
         </button>
         <button
           onClick={handleRefresh}
-          className="p-2.5 hover:bg-gray-50 transition-colors group"
+          className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors group"
           title="Refresh conversation"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600 group-hover:text-gray-800" viewBox="0 0 20 20" fill="currentColor">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-gray-100" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
           </svg>
+        </button>
+        <button
+          onClick={cyclePreference}
+          className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors group"
+          title={`Theme: ${preference} (${resolvedTheme})`}
+          aria-label="Change theme"
+        >
+          {isDark ? (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5 text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-gray-100"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 3v2m0 14v2m9-9h-2M5 12H3m15.364-6.364l-1.414 1.414M7.05 16.95l-1.414 1.414m12.728 0l-1.414-1.414M7.05 7.05L5.636 5.636M12 8a4 4 0 100 8 4 4 0 000-8z"
+              />
+            </svg>
+          ) : (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5 text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-gray-100"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M21 12.79A9 9 0 1111.21 3a7 7 0 109.79 9.79z"
+              />
+            </svg>
+          )}
         </button>
         <CopyButton 
           nodes={nodes} 
@@ -309,7 +350,7 @@ const ConversationTree = () => {
         <ExportButton 
           nodes={nodes} 
           conversationData={conversationData}
-          className="p-2.5 hover:bg-gray-50 transition-colors rounded-r-lg group"
+          className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors rounded-r-lg group"
         />
       </div>
       <ReactFlow
@@ -325,18 +366,30 @@ const ConversationTree = () => {
         onInit={instance => { 
           reactFlowInstance.current = instance;
         }}
+        colorMode={resolvedTheme}
         fitView
         proOptions={{ hideAttribution: true }}
         minZoom={0.1}
         maxZoom={1.5}
         defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
       >
-        <Controls className="bg-white rounded-lg shadow-lg" />
+        <Controls className="bg-white dark:bg-gray-800 rounded-lg shadow-lg" />
         <MiniMap 
-          nodeColor={(node) => node.data?.role === 'user' ? '#fefce8' : '#f9fafb'}
-          className="bg-white rounded-lg shadow-lg"
+          nodeColor={(node) => {
+            const isUser = node.data?.role === 'user' || node.data?.role === 'human';
+            if (isDark) {
+              return isUser ? '#f59e0b' : '#9ca3af';
+            }
+            return isUser ? '#fefce8' : '#f9fafb';
+          }}
+          className="bg-white dark:bg-gray-800 rounded-lg shadow-lg"
         />
-        <Background variant={BackgroundVariant.Dots} gap={12} size={1} color="#f1f1f1" />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={12}
+          size={1}
+          color={isDark ? '#334155' : '#f1f1f1'}
+        />
         {menu && <ContextMenu 
           provider={provider}
           onClick={onPaneClick} 

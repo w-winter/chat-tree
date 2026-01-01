@@ -36,3 +36,28 @@ body {
 .react-flow__attribution {
   display: none;
 }
+
+html.dark,
+html.dark body {
+  background-color: #111827;
+}
+
+.dark .react-flow__controls {
+  background-color: #1f2937;
+  border: 1px solid #374151;
+}
+
+.dark .react-flow__controls-button {
+  background-color: transparent;
+  color: #e5e7eb;
+  border-color: #374151;
+}
+
+.dark .react-flow__controls-button:hover {
+  background-color: #374151;
+}
+
+.dark .react-flow__minimap {
+  background-color: #1f2937;
+  border: 1px solid #374151;
+}

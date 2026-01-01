@@ -19,23 +19,26 @@ export const CustomNode = ({ data }: { data: any }) => {
       } else if (role === 'assistant') {
         return { /* assistant styles */ };
       } else if (role === 'system') {
-        return { 
-          backgroundColor: '#ffffff',
-          border: '1px solid #000000',
-          borderRadius: '4px',
-          // Add any other styling you want for the system/start node
-        };
+        return {};
       } else {
         return { /* default styles */ };
       }
     };
   
+    const isDarkMode = document.documentElement.classList.contains('dark');
+    const hiddenBackground =
+      data.hidden && !isExpanded
+        ? isDarkMode
+          ? 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,0.05) 10px, rgba(255,255,255,0.05) 20px)'
+          : 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,0.03) 10px, rgba(0,0,0,0.03) 20px)'
+        : undefined;
+
     return (
       <>
         <div 
           // Dynamic classes for styling based on role (user/assistant), visibility, and expansion state
           className={`px-4 py-2 shadow-lg rounded-lg border transition-all duration-300 
-            ${data.role === 'user' || data.role === 'human' ? 'bg-yellow-50 border-yellow-200' : data.role === 'assistant' ? 'bg-gray-50 border-gray-200' : 'bg-gray-50 border-gray-200'}
+            ${data.role === 'user' || data.role === 'human' ? 'bg-yellow-50 border-yellow-200 dark:bg-yellow-950/30 dark:border-yellow-900' : data.role === 'assistant' ? 'bg-gray-50 border-gray-200 dark:bg-gray-800 dark:border-gray-700' : 'bg-gray-50 border-gray-200 dark:bg-gray-800 dark:border-gray-700'}
             ${data.hidden ? 'grayscale' : ''}
             ${isExpanded ? 'fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 w-[80vw] h-[80vh]' : ''}
           `} 
@@ -45,7 +48,7 @@ export const CustomNode = ({ data }: { data: any }) => {
             height: isExpanded ? undefined : nodeHeight,
             position: isExpanded ? 'fixed' : 'relative',
             opacity: data.hidden && !isExpanded ? 0.4 : 1,
-            background: data.hidden && !isExpanded ? 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(0,0,0,0.03) 10px, rgba(0,0,0,0.03) 20px)' : undefined,
+            background: hiddenBackground,
             ...getNodeStyle(data.role)
           }}
           onDoubleClick={() => setIsExpanded(!isExpanded)}
@@ -59,10 +62,10 @@ export const CustomNode = ({ data }: { data: any }) => {
               <div className={`w-2 h-2 rounded-full mr-2 ${
                 data.role === 'user' ? 'bg-yellow-400' : data.role === 'assistant' ? 'bg-gray-400' : 'bg-gray-400'
               }`} />
-              <div className="text-xs font-semibold text-gray-500 uppercase">
+              <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
                 {data.role}
                 {data.role === 'assistant' && data.model_slug && (
-                  <span className="ml-2 font-normal text-gray-400 italic lowercase">
+                  <span className="ml-2 font-normal text-gray-400 dark:text-gray-500 italic lowercase">
                     {data.model_slug}
                   </span>
                 )}
@@ -79,7 +82,7 @@ export const CustomNode = ({ data }: { data: any }) => {
           </div>
   
           {/* Message content with markdown support */}
-          <div className={`mt-2 text-sm text-gray-700 ${
+          <div className={`mt-2 text-sm text-gray-700 dark:text-gray-200 ${
             isExpanded  
               ? 'h-[calc(100%-100px)] overflow-y-auto nowheel' 
               : 'line-clamp-3'
@@ -92,7 +95,7 @@ export const CustomNode = ({ data }: { data: any }) => {
   
           {/* Timestamp display */}
           {data.timestamp && (
-            <div className="absolute bottom-2 left-4 text-xs text-gray-400">
+            <div className="absolute bottom-2 left-4 text-xs text-gray-400 dark:text-gray-500">
               {new Date(parseFloat(data.timestamp) * 1000).toLocaleString()} 
             </div>
           )}
@@ -103,7 +106,7 @@ export const CustomNode = ({ data }: { data: any }) => {
           {/* Close button for expanded view */}
           {isExpanded && (
             <button 
-              className="absolute top-4 right-4 p-2 hover:bg-gray-100 rounded-full"
+              className="absolute top-4 right-4 p-2 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full"
               onClick={() => setIsExpanded(false)}
             >
               ✕

@@ -30,11 +30,12 @@ export const CopyButton = ({ nodes, onNodeClick, provider = 'openai' }: CopyButt
     <>
       <button
         onClick={() => setIsModalOpen(true)}
-        className="p-2 text-gray-600 hover:text-gray-800 transition-colors"
+        className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors group"
+        title="Copy conversation"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
-          className="h-4 w-4"
+          className="h-5 w-5 text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-gray-100"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"

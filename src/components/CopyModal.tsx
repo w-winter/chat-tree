@@ -55,50 +55,50 @@ export const CopyModal = ({ onClose, onCopy, nodes, onNodeClick, provider = 'ope
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Copy Conversation</h3>
-        <p className="text-sm text-gray-600 mb-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Copy Conversation</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
           Select the messages you want to copy to clipboard in markdown format.
           <br />
-          <span className="text-xs text-gray-500">Right-click a message to navigate to it in the conversation.</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">Right-click a message to navigate to it in the conversation.</span>
         </p>
         
         <div className="flex gap-2 mb-4">
           <button
             onClick={handleSelectAll}
-            className="text-sm text-blue-600 hover:text-blue-800"
+            className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
           >
             Select All
           </button>
           <button
             onClick={handleDeselectAll}
-            className="text-sm text-blue-600 hover:text-blue-800"
+            className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
           >
             Deselect All
           </button>
         </div>
 
-        <div className="max-h-96 overflow-y-auto mb-4 border border-gray-200 rounded-lg">
+        <div className="max-h-96 overflow-y-auto mb-4 border border-gray-200 dark:border-gray-700 rounded-lg">
           {visibleNodes.map(node => (
             <div
               key={node.id}
-              className={`p-3 border-b border-gray-200 last:border-b-0 cursor-pointer transition-colors ${
+              className={`p-3 border-b border-gray-200 dark:border-gray-700 last:border-b-0 cursor-pointer transition-colors ${
                 selectedNodeIds.includes(node.id)
-                  ? 'bg-blue-100 hover:bg-blue-200'
-                  : 'hover:bg-gray-50'
+                  ? 'bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/40 dark:hover:bg-blue-900/60'
+                  : 'hover:bg-gray-50 dark:hover:bg-gray-700/60'
               }`}
               onClick={() => handleNodeToggle(node.id)}
               onContextMenu={(e) => handleContextMenu(e, node)}
             >
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-900">
+                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
                   {node.data?.role === 'user' ? 'You' : 'Assistant'}
                 </span>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-gray-500 dark:text-gray-400">
                   {node.data?.timestamp ? new Date(node.data.timestamp * 1000).toLocaleString() : ''}
                 </span>
               </div>
-              <div className="mt-1 text-sm text-gray-700 line-clamp-2">
+              <div className="mt-1 text-sm text-gray-700 dark:text-gray-200 line-clamp-2">
                 {node.data?.label}
               </div>
             </div>
@@ -108,7 +108,7 @@ export const CopyModal = ({ onClose, onCopy, nodes, onNodeClick, provider = 'ope
         <div className="flex justify-end gap-3">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+            className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100"
           >
             Cancel
           </button>

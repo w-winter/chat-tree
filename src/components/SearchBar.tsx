@@ -139,7 +139,7 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl mx-4">
         <div className="p-4">
           <div className="flex items-center space-x-2">
             <input
@@ -148,9 +148,9 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search messages... (⌘+K)"
-              className="w-full px-4 py-2 text-lg border-none focus:outline-none focus:ring-0"
+              className="w-full px-4 py-2 text-lg border-none bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-0"
             />
-            <kbd className="px-2 py-1 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg">
+            <kbd className="px-2 py-1 text-xs font-semibold text-gray-800 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
               esc
             </kbd>
           </div>
@@ -158,30 +158,30 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
         
         {results.length > 0 ? (
           <>
-            <div className="border-t border-gray-200" />
+            <div className="border-t border-gray-200 dark:border-gray-700" />
             <div className="max-h-96 overflow-y-auto">
               {results.map((result, index) => (
                 <button
                   key={result.nodeId}
                   onClick={() => handleResultClick(result)}
-                  className={`w-full px-4 py-3 text-left hover:bg-gray-50 focus:outline-none ${
-                    index === selectedIndex ? 'bg-gray-50' : ''
+                  className={`w-full px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none ${
+                    index === selectedIndex ? 'bg-gray-50 dark:bg-gray-700' : ''
                   }`}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2">
-                      <span className="text-sm font-medium text-gray-900">
+                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
                         {result.node.data?.role === (provider === 'openai' ? 'user' : 'human') ? 'You' : 'Assistant'}
                       </span>
-                      <span className="text-sm text-gray-500">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">
                         {new Date((result.node.data?.timestamp || 0) * 1000).toLocaleString()}
                       </span>
                     </div>
-                    <span className="text-xs text-gray-500">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
                       {result.matches} match{result.matches !== 1 ? 'es' : ''}
                     </span>
                   </div>
-                  <div className="mt-1 text-sm text-gray-700 line-clamp-2">
+                  <div className="mt-1 text-sm text-gray-700 dark:text-gray-200 line-clamp-2">
                     {result.preview}
                   </div>
                 </button>
@@ -189,7 +189,7 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
             </div>
           </>
         ) : query ? (
-          <div className="px-4 py-8 text-center text-gray-500">
+          <div className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
             No results found
           </div>
         ) : null}

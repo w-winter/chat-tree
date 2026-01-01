@@ -142,23 +142,23 @@ export const ContextMenu = (props: ContextMenuProps) => {
         <div
             ref={menuRef}
             style={getPositionStyle()}
-            className="bg-white shadow-lg rounded-lg p-3 z-50 min-w-[180px]"
+            className="bg-white dark:bg-gray-800 shadow-lg rounded-lg p-3 z-50 min-w-[180px]"
         >
             {props.role && (
-                <div className="px-2 py-1 text-xs text-gray-500 border-b border-gray-100">
+                <div className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-gray-700">
                     Role: {props.role}
                 </div>
             )}
             <div className="mt-1 space-y-1">
                 <button 
-                    className="w-full px-2 py-1.5 text-sm text-left text-gray-700 hover:bg-gray-50 rounded transition-colors" 
+                    className="w-full px-2 py-1.5 text-sm text-left text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded transition-colors"
                     onClick={selectBranch}
                 >
                     Select
                 </button>
                 {hasChildren && (
                     <button 
-                        className="w-full px-2 py-1.5 text-sm text-left text-gray-700 hover:bg-gray-50 rounded transition-colors" 
+                        className="w-full px-2 py-1.5 text-sm text-left text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded transition-colors"
                         onClick={handleActionClick}
                     >
                         {props.role === 'user' || props.role === 'human' ? 'Edit this message' : 'Respond to this message'}
@@ -175,12 +175,12 @@ export const ContextMenu = (props: ContextMenuProps) => {
                                         handleSend();
                                     }
                                 }}
-                                className="w-full px-4 py-2 text-sm text-gray-700 border rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 min-h-[100px] resize-y"
+                                className="w-full px-4 py-2 text-sm text-gray-700 dark:text-gray-100 bg-white dark:bg-gray-900 border rounded-lg border-gray-300 dark:border-gray-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 min-h-[100px] resize-y"
                                 placeholder={props.role === 'user' || props.role === 'human' ? "Edit message..." : "Type your response..."}
                                 autoFocus
                             />
                             <div className="flex justify-between items-center mt-2">
-                                <span className="text-xs text-gray-500">Press ⌘+Enter to send</span>
+                                <span className="text-xs text-gray-500 dark:text-gray-400">Press ⌘+Enter to send</span>
                                 <button 
                                     onClick={handleSend}
                                     className="px-3 py-1 text-sm text-white bg-blue-500 rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
