@@ -16,6 +16,7 @@ A browser extension that visualizes ChatGPT and Claude.ai conversations as inter
   - Obsidian (for Obsidian note-taking)
   - XML (for structured data)
 - **Cross-Platform Support**: Works with both OpenAI's ChatGPT and Anthropic's Claude.ai
+- **Theme Toggle**: Switch between light, dark, and system theme modes
 
 ## Tech Stack
 
