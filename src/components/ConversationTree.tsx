@@ -9,10 +9,11 @@ import { createNodesInOrder } from '../utils/nodeCreation';
 import { createClaudeNodesInOrder} from '../utils/claudeNodeCreation';
 import { calculateSteps } from '../utils/nodeNavigation';
 import { ExportButton } from './ExportButton';
+import { ExportButtonClaude } from './ExportButtonClaude';
 import { CopyButton } from './CopyButton';
 import { CustomNode } from "./CustomNode";
 import { SearchBar } from './SearchBar';
-import { OpenAIConversationData, ClaudeConversation, ClaudeNode} from '../types/interfaces';
+import { OpenAIConversationData, ClaudeConversation, ClaudeNode, OpenAINode } from '../types/interfaces';
 import { computeNavigationTargetClaude } from '../utils/nodeNavigationClaude';
 import '@xyflow/react/dist/style.css';
 
@@ -402,11 +403,19 @@ const ConversationTree = () => {
           onNodeClick={handleNodeClick}
           provider={provider}
         />
-        <ExportButton 
-          nodes={nodes} 
-          conversationData={conversationData}
-          className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors rounded-r-lg group"
-        />
+        {provider === 'claude' ? (
+          <ExportButtonClaude
+            nodes={nodes as unknown as ClaudeNode[]}
+            conversationData={conversationData as ClaudeConversation}
+            className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors rounded-r-lg group"
+          />
+        ) : (
+          <ExportButton
+            nodes={nodes as unknown as OpenAINode[]}
+            conversationData={conversationData as OpenAIConversationData}
+            className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors rounded-r-lg group"
+          />
+        )}
       </div>
       <ReactFlow
         ref={ref}
