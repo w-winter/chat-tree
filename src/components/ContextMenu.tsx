@@ -53,9 +53,9 @@ export const ContextMenu = (props: ContextMenuProps) => {
         const action = props.provider === 'openai' ? 'editMessage' : 'editMessageClaude';
         const messageId = props.provider === 'openai' ? props.messageId : props.message;
 
-        const response = await chrome.runtime.sendMessage({ 
-            action: action, 
-            messageId: messageId, 
+        const response = await chrome.runtime.sendMessage({
+            action: action,
+            messageId: messageId,
             message: inputValue,
             requireCompletion: true
         });
@@ -77,9 +77,9 @@ export const ContextMenu = (props: ContextMenuProps) => {
         const childrenIds = props.provider === 'openai' ? props.childrenIds : props.childrenTexts;
         const action = props.provider === 'openai' ? 'respondToMessage' : 'respondToMessageClaude';
 
-        const response = await chrome.runtime.sendMessage({ 
-            action: action, 
-            childrenIds: childrenIds, 
+        const response = await chrome.runtime.sendMessage({
+            action: action,
+            childrenIds: childrenIds,
             message: inputValue,
             requireCompletion: true
         });

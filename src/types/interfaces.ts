@@ -201,6 +201,21 @@ export interface OpenAINavigationStep {
   role: string;
 }
 
+export interface ClaudeEditMessageRequest {
+  action: 'editMessageClaude';
+  messageText: string; // Original message text (DOM matching fallback)
+  newMessage: string; // Updated message text to submit
+  messageUuid?: string; // Claude API UUID (may not exist in DOM)
+  requireCompletion?: boolean;
+}
+
+export interface ClaudeRespondToMessageRequest {
+  action: 'respondToMessageClaude';
+  childrenTexts: string[]; // Child message texts used for DOM matching
+  message: string; // Response text to submit
+  requireCompletion?: boolean;
+}
+
 export interface ClaudeNavigationLevel {
   siblingCount: number;
   targetIndex: number; // 0-indexed
