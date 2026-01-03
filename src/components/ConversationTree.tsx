@@ -57,6 +57,26 @@ const ConversationTree = () => {
 
   const { preference, resolvedTheme, isDark, cyclePreference } = useThemePreference();
 
+  useEffect(() => {
+    const desiredStroke = isDark ? '#f9fafb' : '#000000';
+    const currentEdges = edges as any[];
+    const needsUpdate = currentEdges.some((edge) => (edge.style?.stroke ?? '#000000') !== desiredStroke);
+
+    if (!needsUpdate) {
+      return;
+    }
+
+    setEdges(
+      currentEdges.map((edge) => ({
+        ...edge,
+        style: {
+          ...(edge.style || {}),
+          stroke: desiredStroke,
+        },
+      })) as any
+    );
+  }, [isDark, edges, setEdges]);
+
   // Create nodes and edges when conversation data changes
   useEffect(() => {
     if (conversationData) {
@@ -307,10 +327,10 @@ const ConversationTree = () => {
         <button
           onClick={cyclePreference}
           className="p-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors group"
-          title={`Theme: ${preference} (${resolvedTheme})`}
+          title={`Theme: ${preference}${preference === 'system' ? ` (${resolvedTheme})` : ''}`}
           aria-label="Change theme"
         >
-          {isDark ? (
+          {preference === 'system' ? (
             <svg
               xmlns="http://www.w3.org/2000/svg"
               className="h-5 w-5 text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-gray-100"
@@ -322,7 +342,22 @@ const ConversationTree = () => {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth={2}
-                d="M12 3v2m0 14v2m9-9h-2M5 12H3m15.364-6.364l-1.414 1.414M7.05 16.95l-1.414 1.414m12.728 0l-1.414-1.414M7.05 7.05L5.636 5.636M12 8a4 4 0 100 8 4 4 0 000-8z"
+                d="M9.75 17h4.5m-6 3h7.5M4.5 4.5h15v10.5h-15V4.5z"
+              />
+            </svg>
+          ) : preference === 'dark' ? (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5 text-gray-600 group-hover:text-gray-800 dark:text-gray-300 dark:group-hover:text-gray-100"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M21 12.79A9 9 0 1111.21 3a7 7 0 109.79 9.79z"
               />
             </svg>
           ) : (
@@ -337,7 +372,7 @@ const ConversationTree = () => {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth={2}
-                d="M21 12.79A9 9 0 1111.21 3a7 7 0 109.79 9.79z"
+                d="M12 3v2m0 14v2m9-9h-2M5 12H3m15.364-6.364l-1.414 1.414M7.05 16.95l-1.414 1.414m12.728 0l-1.414-1.414M7.05 7.05L5.636 5.636M12 8a4 4 0 100 8 4 4 0 000-8z"
               />
             </svg>
           )}
