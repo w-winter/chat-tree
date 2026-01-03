@@ -1,22 +1,41 @@
 import { ClaudeNavigationTarget, ClaudeNode } from '../types/interfaces';
 
+const normalizeText = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+const makeNeedles = (text: string): string[] => {
+  const normalized = normalizeText(text);
+  if (!normalized) return [];
+
+  const needles: string[] = [];
+
+  const head = normalized.slice(0, 80);
+  if (head) needles.push(head);
+
+  if (normalized.length > 240) {
+    const midStart = Math.max(0, Math.floor(normalized.length / 2) - 40);
+    const mid = normalized.slice(midStart, midStart + 80);
+    if (mid && !needles.includes(mid)) needles.push(mid);
+
+    const tail = normalized.slice(-80);
+    if (tail && !needles.includes(tail)) needles.push(tail);
+  }
+
+  return needles;
+};
+
+const makeNeedle = (text: string) => makeNeedles(text)[0] || null;
+
 export const computeNavigationTargetClaude = (nodes: ClaudeNode[], targetId: string): ClaudeNavigationTarget => {
   const levels: ClaudeNavigationTarget['levels'] = [];
 
-  const normalizeText = (text: string) => text.replace(/\s+/g, ' ').trim();
-
-  const makeNeedle = (text: string) => {
-    const normalized = normalizeText(text);
-    if (!normalized) return null;
-    return normalized.slice(0, 80);
-  };
-
   let currentNode = nodes.find((node) => node.id === targetId);
   if (!currentNode) {
-    return { levels, targetNeedle: null };
+    return { levels, targetNeedle: null, targetNeedles: [] };
   }
 
-  const targetNeedle = makeNeedle(currentNode.data?.text || currentNode.data?.label || '');
+  const targetText = currentNode.data?.text || currentNode.data?.label || '';
+  const targetNeedles = makeNeedles(targetText);
+  const targetNeedle = targetNeedles[0] || null;
 
   while (currentNode) {
     const parent = nodes.find((node) => node.id === currentNode?.parent);
@@ -37,11 +56,12 @@ export const computeNavigationTargetClaude = (nodes: ClaudeNode[], targetId: str
         .filter((needle): needle is string => Boolean(needle))
         .slice(0, 10);
 
-      levels.unshift({ siblingCount, targetIndex, anchorText: parent.data?.text || null, siblingNeedles });
+      const parentAnchorText = parent.data?.text ? normalizeText(parent.data.text).slice(0, 400) : null;
+      levels.unshift({ siblingCount, targetIndex, anchorText: parentAnchorText, siblingNeedles });
     }
 
     currentNode = parent;
   }
 
-  return { levels, targetNeedle };
+  return { levels, targetNeedle, targetNeedles };
 };

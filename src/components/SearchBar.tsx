@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ClaudeContentBlock,
   ClaudeNavigationTarget,
@@ -6,7 +6,7 @@ import {
   ConversationProvider,
   NavigationRequest,
   OpenAINavigationStep,
-  OpenAINode
+  OpenAINode,
 } from '../types/interfaces';
 
 interface SearchBarProps {
@@ -24,66 +24,98 @@ interface SearchResult {
   preview: string;
 }
 
+const countOccurrences = (textLower: string, queryLower: string): number => {
+  if (!queryLower) return 0;
+
+  let count = 0;
+  let index = textLower.indexOf(queryLower);
+  while (index !== -1) {
+    count += 1;
+    index = textLower.indexOf(queryLower, index + queryLower.length);
+  }
+  return count;
+};
+
 export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: SearchBarProps) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const runNavigation = useCallback(async (result: SearchResult) => {
+    const navigation = await onNodeClick(result.nodeId);
+    if (!navigation) {
+      onClose();
+      return;
+    }
+
+    await chrome.runtime.sendMessage(
+      provider === 'openai'
+        ? {
+            action: 'executeSteps',
+            steps: navigation as OpenAINavigationStep[],
+            requireCompletion: true,
+          }
+        : {
+            action: 'executeStepsClaude',
+            navigationTarget: navigation as ClaudeNavigationTarget,
+            requireCompletion: true,
+          }
+    );
+
+    const goToResponse = await chrome.runtime.sendMessage({
+      action: provider === 'openai' ? 'goToTarget' : 'goToTargetClaude',
+      targetId: provider === 'openai' ? result.nodeId : (result.node as ClaudeNode).data.text,
+    });
+
+    if (!goToResponse?.completed) {
+      console.warn('[SearchBar] goToTarget did not complete successfully:', goToResponse);
+    }
+
+    onRefresh();
+    onClose();
+  }, [onClose, onNodeClick, onRefresh, provider]);
+
   useEffect(() => {
-    // Focus input on mount
     inputRef.current?.focus();
 
-    // Handle keyboard shortcuts
-    const handleKeyDown = async (e: KeyboardEvent) => {
+    const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
-      } else if (e.key === 'ArrowDown') {
+        return;
+      }
+
+      if (e.key === 'ArrowDown') {
+        if (results.length === 0) return;
         e.preventDefault();
-        setSelectedIndex(prev => (prev + 1) % results.length);
-      } else if (e.key === 'ArrowUp') {
+        setSelectedIndex((prev) => (prev + 1) % results.length);
+        return;
+      }
+
+      if (e.key === 'ArrowUp') {
+        if (results.length === 0) return;
         e.preventDefault();
-        setSelectedIndex(prev => (prev - 1 + results.length) % results.length);
-      } else if (e.key === 'Enter' && results.length > 0) {
+        setSelectedIndex((prev) => (prev - 1 + results.length) % results.length);
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        if (results.length === 0) return;
         e.preventDefault();
-          const selectedResult = results[selectedIndex];
-        if (selectedResult) {
-          const navigation = await onNodeClick(selectedResult.nodeId);
-          if (navigation) {
-            chrome.runtime
-              .sendMessage(
-                provider === 'openai'
-                  ? {
-                      action: 'executeSteps',
-                      steps: navigation as OpenAINavigationStep[],
-                      requireCompletion: true
-                    }
-                  : {
-                      action: 'executeStepsClaude',
-                      navigationTarget: navigation as ClaudeNavigationTarget,
-                      requireCompletion: true
-                    }
-              )
-              .then(() => {
-                chrome.runtime
-                  .sendMessage({
-                    action: provider === 'openai' ? 'goToTarget' : 'goToTargetClaude',
-                    targetId:
-                      provider === 'openai' ? selectedResult.nodeId : (selectedResult.node as ClaudeNode).data.text
-                  })
-                  .then(() => {
-                    onRefresh();
-                  });
-              });
-          }
-          onClose();
-        }
+
+        const index = Math.max(0, Math.min(selectedIndex, results.length - 1));
+        const selectedResult = results[index];
+        if (!selectedResult) return;
+
+        void runNavigation(selectedResult).catch((error) => {
+          console.error('[SearchBar] Navigation failed:', error);
+        });
       }
     };
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [results, selectedIndex, onNodeClick, onClose, onRefresh, provider]);
+  }, [results, selectedIndex, onClose, runNavigation]);
 
   useEffect(() => {
     if (!query.trim()) {
@@ -94,14 +126,12 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
     const searchResults: SearchResult[] = [];
     const searchQuery = query.toLowerCase();
 
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       let content = '';
-      let matches = 0;
 
       if (provider === 'openai') {
         content = node.data?.label || '';
       } else {
-        // For Claude, get content from message blocks
         const claudeNode = node as ClaudeNode;
         content = (claudeNode.message?.content || [])
           .filter((block: ClaudeContentBlock) => block.type === 'text')
@@ -112,22 +142,19 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
       if (!content) return;
 
       const contentLower = content.toLowerCase();
-      matches = (contentLower.match(new RegExp(searchQuery, 'g')) || []).length;
+      const matches = countOccurrences(contentLower, searchQuery);
+      if (matches === 0) return;
 
-      if (matches > 0) {
-        // Create a preview with highlighted matches
-        const preview = content.slice(0, 100) + (content.length > 100 ? '...' : '');
-        
-        searchResults.push({
-          nodeId: node.id,
-          node,
-          matches,
-          preview
-        });
-      }
+      const preview = content.slice(0, 100) + (content.length > 100 ? '...' : '');
+
+      searchResults.push({
+        nodeId: node.id,
+        node,
+        matches,
+        preview,
+      });
     });
 
-    // Sort by number of matches and then by timestamp (newer first)
     searchResults.sort((a, b) => {
       if (b.matches !== a.matches) {
         return b.matches - a.matches;
@@ -139,35 +166,10 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
     setSelectedIndex(0);
   }, [query, nodes, provider]);
 
-  const handleResultClick = async (result: SearchResult) => {
-    const navigation = await onNodeClick(result.nodeId);
-    if (navigation) {
-      chrome.runtime
-        .sendMessage(
-          provider === 'openai'
-            ? {
-                action: 'executeSteps',
-                steps: navigation as OpenAINavigationStep[],
-                requireCompletion: true
-              }
-            : {
-                action: 'executeStepsClaude',
-                navigationTarget: navigation as ClaudeNavigationTarget,
-                requireCompletion: true
-              }
-        )
-        .then(() => {
-          chrome.runtime
-            .sendMessage({
-              action: provider === 'openai' ? 'goToTarget' : 'goToTargetClaude',
-              targetId: provider === 'openai' ? result.nodeId : (result.node as ClaudeNode).data.text
-            })
-            .then(() => {
-              onRefresh();
-            });
-        });
-    }
-    onClose();
+  const handleResultClick = (result: SearchResult) => {
+    void runNavigation(result).catch((error) => {
+      console.error('[SearchBar] Navigation failed:', error);
+    });
   };
 
   return (
@@ -188,7 +190,7 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
             </kbd>
           </div>
         </div>
-        
+
         {results.length > 0 ? (
           <>
             <div className="border-t border-gray-200 dark:border-gray-700" />
@@ -222,9 +224,7 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
             </div>
           </>
         ) : query ? (
-          <div className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
-            No results found
-          </div>
+          <div className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">No results found</div>
         ) : null}
       </div>
     </div>

@@ -26,7 +26,6 @@
     ],
     "host_permissions": [
         "https://chatgpt.com/backend-api/*",
-        "https://claude.ai/api/organizations/*",
         "https://claude.ai/*"
     ],
     "content_security_policy": {

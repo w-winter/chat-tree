@@ -210,7 +210,8 @@ export interface ClaudeNavigationLevel {
 
 export interface ClaudeNavigationTarget {
   levels: ClaudeNavigationLevel[];
-  targetNeedle: string | null; // Short text needle for the target message to allow early-success checks
+  targetNeedle: string | null; // Back-compat single needle for early-success checks
+  targetNeedles?: string[]; // Preferred: multiple needles to reduce false positives
 }
 
 export type NavigationRequest = OpenAINavigationStep[] | ClaudeNavigationTarget;

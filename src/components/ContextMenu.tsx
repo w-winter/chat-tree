@@ -117,15 +117,31 @@ export const ContextMenu = (props: ContextMenuProps) => {
                     }
             );
 
-            if (!execResponse.completed) {
+            const completed =
+                typeof execResponse === 'object' &&
+                execResponse !== null &&
+                'completed' in execResponse &&
+                Boolean((execResponse as { completed?: unknown }).completed);
+
+            if (!completed) {
                 throw new Error('Background operation did not complete successfully');
             }
 
             props.onRefresh();
-            await chrome.runtime.sendMessage({ 
+            const goToResponse = await chrome.runtime.sendMessage({
                 action: props.provider === 'openai' ? "goToTarget" : "goToTargetClaude", 
                 targetId: props.provider === 'openai' ? props.messageId : props.message 
             });
+
+            const goToCompleted =
+                typeof goToResponse === 'object' &&
+                goToResponse !== null &&
+                'completed' in goToResponse &&
+                Boolean((goToResponse as { completed?: unknown }).completed);
+
+            if (!goToCompleted) {
+                console.warn('goToTarget did not complete successfully:', goToResponse);
+            }
         } catch (error) {
             console.error('Error executing steps:', error);
         }

@@ -238,8 +238,10 @@ const ConversationTree = () => {
       const navigationTarget = computeNavigationTargetClaude(navigationNodes, messageId);
       
       // After navigation completes, update visibility states again
-      setTimeout(async () => {
-        await updateNodesVisibility();
+      setTimeout(() => {
+        void updateNodesVisibility().catch((error) => {
+          console.warn('[handleNodeClick] updateNodesVisibility failed:', error);
+        });
       }, 100); // Small delay to ensure DOM updates have completed
 
       return navigationTarget;

@@ -92,7 +92,7 @@ export const CopyModal = ({ onClose, onCopy, nodes, onNodeClick, provider = 'ope
             >
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  {node.data?.role === 'user' ? 'You' : 'Assistant'}
+                  {(node.data?.role === 'user' || node.data?.role === 'human') ? 'You' : 'Assistant'}
                 </span>
                 <span className="text-xs text-gray-500 dark:text-gray-400">
                   {node.data?.timestamp ? new Date(node.data.timestamp * 1000).toLocaleString() : ''}
