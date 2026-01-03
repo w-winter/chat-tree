@@ -13,7 +13,7 @@ import { CopyButton } from './CopyButton';
 import { CustomNode } from "./CustomNode";
 import { SearchBar } from './SearchBar';
 import { OpenAIConversationData, ClaudeConversation, ClaudeNode} from '../types/interfaces';
-import { calculateStepsClaude } from '../utils/nodeNavigationClaude';
+import { computeNavigationTargetClaude } from '../utils/nodeNavigationClaude';
 import '@xyflow/react/dist/style.css';
 
 const nodeTypes: NodeTypes = {
@@ -188,12 +188,39 @@ const ConversationTree = () => {
   }, [nodes, provider, edges, previousPathNodeIds]);
 
   // Calculate navigation steps when a node is clicked
-  const handleNodeClick = useCallback((messageId: string) => {
+  const handleNodeClick = useCallback(async (messageId: string) => {
     setMenu(null);
     
     if (provider === 'openai') {
       return calculateSteps(nodes, messageId);
     } else {
+      let navigationNodes = nodes as unknown as ClaudeNode[];
+
+      // Claude DOM visibility refresh is best-effort only
+      try {
+        const nodeTexts = navigationNodes.map((node) => node.data.text);
+        const existingNodes = await checkNodesClaude(nodeTexts);
+
+        const freshNodes = navigationNodes.map((node, index) => ({
+          ...node,
+          data: {
+            ...node.data,
+            hidden: existingNodes[index]
+          }
+        })) as ClaudeNode[];
+
+        navigationNodes = freshNodes;
+        setNodes(freshNodes as any);
+
+        const currentlyVisibleNodes = new Set(
+          freshNodes
+            .filter((node) => !node.data.hidden)
+            .map((node) => node.id)
+        );
+        setPreviousPathNodeIds(currentlyVisibleNodes);
+      } catch (error) {
+        console.warn('[handleNodeClick] Failed to refresh Claude visibility from DOM:', error);
+      }
       
       // Find the parent of the clicked node
       const parentEdge = typedEdges.find(edge => edge.target === messageId);
@@ -208,23 +235,14 @@ const ConversationTree = () => {
         });
       }
 
-      // For Claude, store the currently visible nodes before navigation
-      const currentlyVisibleNodes = new Set(
-        nodes
-          .filter((node: any) => !node.data.hidden)
-          .map((node: any) => node.id)
-      );
-      setPreviousPathNodeIds(currentlyVisibleNodes);
-
-      // Calculate and execute navigation steps
-      const steps = calculateStepsClaude(nodes as ClaudeNode[], messageId, lastActiveChildMap);
+      const navigationTarget = computeNavigationTargetClaude(navigationNodes, messageId);
       
-      // After navigation completes, update visibility states
+      // After navigation completes, update visibility states again
       setTimeout(async () => {
         await updateNodesVisibility();
       }, 100); // Small delay to ensure DOM updates have completed
 
-      return steps;
+      return navigationTarget;
     }
   }, [nodes, provider, lastActiveChildMap, typedEdges, updateNodesVisibility]);
 

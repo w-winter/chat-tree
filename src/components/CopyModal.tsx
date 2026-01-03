@@ -1,12 +1,12 @@
-import { OpenAINode } from '../types/interfaces';
 import { useState } from 'react';
+import { ClaudeNode, ConversationProvider, OpenAINode } from '../types/interfaces';
 
 interface CopyModalProps {
   onClose: () => void;
   onCopy: (selectedNodeIds: string[]) => void;
-  nodes: OpenAINode[];
+  nodes: OpenAINode[] | ClaudeNode[];
   onNodeClick?: (nodeId: string) => void;
-  provider?: 'openai' | 'claude';
+  provider?: ConversationProvider;
 }
 
 export const CopyModal = ({ onClose, onCopy, nodes, onNodeClick, provider = 'openai' }: CopyModalProps) => {
@@ -39,13 +39,13 @@ export const CopyModal = ({ onClose, onCopy, nodes, onNodeClick, provider = 'ope
     setTimeout(() => setShowCopied(false), 2000);
   };
 
-  const handleContextMenu = async (e: React.MouseEvent, node: OpenAINode) => {
+  const handleContextMenu = async (e: React.MouseEvent, node: OpenAINode | ClaudeNode) => {
     e.preventDefault();
     if (onNodeClick) {
       try {
         await chrome.runtime.sendMessage({ 
           action: provider === 'openai' ? "goToTarget" : "goToTargetClaude", 
-          targetId: provider === 'openai' ? node.id : node.data?.label
+          targetId: provider === 'openai' ? node.id : (node as ClaudeNode).data.text
         });
       } catch (error) {
         console.error('Error navigating to target:', error);

@@ -1,8 +1,34 @@
-import { ClaudeNode, ClaudeEdge, ClaudeConversation } from '../types/interfaces';
+import { ClaudeNode, ClaudeEdge, ClaudeConversation, ClaudeChatMessage } from '../types/interfaces';
 import { nodeWidth, nodeHeight } from "../constants/constants";
 import dagre from '@dagrejs/dagre';
 
 const dagreGraph = new dagre.graphlib.Graph().setGraph({}).setDefaultEdgeLabel(() => ({}));
+
+// Extract text from all content blocks in a Claude message
+const extractMessageText = (message: ClaudeChatMessage): string => {
+  // Try content blocks first - join all text blocks
+  if (message.content && message.content.length > 0) {
+    const texts = message.content
+      .filter(block => block.text && block.text.trim())
+      .map(block => block.text.trim());
+    if (texts.length > 0) {
+      return texts.join('\n\n');
+    }
+  }
+  
+  // Fall back to message.text if content blocks are empty
+  if (message.text && message.text.trim()) {
+    return message.text.trim();
+  }
+  
+  return 'No content available';
+};
+
+// Create a short label/preview from full text
+const createLabel = (fullText: string, maxLength: number = 100): string => {
+  if (fullText.length <= maxLength) return fullText;
+  return fullText.substring(0, maxLength) + '...';
+};
 
 export const createClaudeNodesInOrder = async (
   conversationData: ClaudeConversation,
@@ -35,6 +61,10 @@ export const createClaudeNodesInOrder = async (
   // Create nodes for each message
   messages.forEach((message, _index: number) => {
     message.parent_message_uuid = message.parent_message_uuid === '00000000-0000-4000-8000-000000000000' ? 'root' : message.parent_message_uuid;
+    
+    // Extract full text from all content blocks
+    const fullText = extractMessageText(message);
+    
     const node: ClaudeNode = {
       id: message.uuid,
       type: 'custom',
@@ -43,8 +73,8 @@ export const createClaudeNodesInOrder = async (
       position: { x: 0, y: 0 }, // Will be set by dagre layout
       message: message,
       data: {
-        label: message.content[0]?.text || 'No content available',
-        text: message.content[0]?.text || 'No content available',
+        label: createLabel(fullText),
+        text: fullText,
         role: message.sender,
         timestamp: new Date(message.created_at).getTime(),
         id: message.uuid,

@@ -1,9 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
-import { ClaudeNode, ConversationProvider, OpenAINode, ClaudeContentBlock } from '../types/interfaces';
+import {
+  ClaudeContentBlock,
+  ClaudeNavigationTarget,
+  ClaudeNode,
+  ConversationProvider,
+  NavigationRequest,
+  OpenAINavigationStep,
+  OpenAINode
+} from '../types/interfaces';
 
 interface SearchBarProps {
   nodes: OpenAINode[] | ClaudeNode[];
-  onNodeClick: (messageId: string) => any[];
+  onNodeClick: (messageId: string) => Promise<NavigationRequest> | NavigationRequest;
   onClose: () => void;
   onRefresh: () => void;
   provider: ConversationProvider;
@@ -27,7 +35,7 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
     inputRef.current?.focus();
 
     // Handle keyboard shortcuts
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
       } else if (e.key === 'ArrowDown') {
@@ -38,22 +46,35 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
         setSelectedIndex(prev => (prev - 1 + results.length) % results.length);
       } else if (e.key === 'Enter' && results.length > 0) {
         e.preventDefault();
-        const selectedResult = results[selectedIndex];
+          const selectedResult = results[selectedIndex];
         if (selectedResult) {
-          const steps = onNodeClick(selectedResult.nodeId);
-          if (steps) {
-            chrome.runtime.sendMessage({ 
-              action: provider === 'openai' ? "executeSteps" : "executeStepsClaude", 
-              steps: steps,
-              requireCompletion: true
-            }).then(() => {
-              chrome.runtime.sendMessage({ 
-                action: "goToTarget", 
-                targetId: selectedResult.nodeId 
-              }).then(() => {
-                onRefresh();
+          const navigation = await onNodeClick(selectedResult.nodeId);
+          if (navigation) {
+            chrome.runtime
+              .sendMessage(
+                provider === 'openai'
+                  ? {
+                      action: 'executeSteps',
+                      steps: navigation as OpenAINavigationStep[],
+                      requireCompletion: true
+                    }
+                  : {
+                      action: 'executeStepsClaude',
+                      navigationTarget: navigation as ClaudeNavigationTarget,
+                      requireCompletion: true
+                    }
+              )
+              .then(() => {
+                chrome.runtime
+                  .sendMessage({
+                    action: provider === 'openai' ? 'goToTarget' : 'goToTargetClaude',
+                    targetId:
+                      provider === 'openai' ? selectedResult.nodeId : (selectedResult.node as ClaudeNode).data.text
+                  })
+                  .then(() => {
+                    onRefresh();
+                  });
               });
-            });
           }
           onClose();
         }
@@ -118,21 +139,33 @@ export const SearchBar = ({ nodes, onNodeClick, onClose, onRefresh, provider }: 
     setSelectedIndex(0);
   }, [query, nodes, provider]);
 
-  const handleResultClick = (result: SearchResult) => {
-    const steps = onNodeClick(result.nodeId);
-    if (steps) {
-      chrome.runtime.sendMessage({ 
-        action: provider === 'openai' ? "executeSteps" : "executeStepsClaude", 
-        steps: steps,
-        requireCompletion: true
-      }).then(() => {
-        chrome.runtime.sendMessage({ 
-          action: "goToTarget", 
-          targetId: result.nodeId 
-        }).then(() => {
-          onRefresh();
+  const handleResultClick = async (result: SearchResult) => {
+    const navigation = await onNodeClick(result.nodeId);
+    if (navigation) {
+      chrome.runtime
+        .sendMessage(
+          provider === 'openai'
+            ? {
+                action: 'executeSteps',
+                steps: navigation as OpenAINavigationStep[],
+                requireCompletion: true
+              }
+            : {
+                action: 'executeStepsClaude',
+                navigationTarget: navigation as ClaudeNavigationTarget,
+                requireCompletion: true
+              }
+        )
+        .then(() => {
+          chrome.runtime
+            .sendMessage({
+              action: provider === 'openai' ? 'goToTarget' : 'goToTargetClaude',
+              targetId: provider === 'openai' ? result.nodeId : (result.node as ClaudeNode).data.text
+            })
+            .then(() => {
+              onRefresh();
+            });
         });
-      });
     }
     onClose();
   };

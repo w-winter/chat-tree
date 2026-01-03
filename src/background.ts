@@ -3,6 +3,27 @@ const CHATGPT_ORIGIN = 'https://chatgpt.com';
 const CLAUDE_ORIGIN = 'https://claude.ai';
 let claudeOrgId: string | null = null;
 
+const DEBUG_CLAUDE_NAVIGATION = false;
+const debugClaudeNavigation = (...args: unknown[]) => {
+  if (DEBUG_CLAUDE_NAVIGATION) {
+    // eslint-disable-next-line no-console
+    console.log(...args);
+  }
+};
+
+let claudeNavigationQueue: Promise<void> = Promise.resolve();
+
+async function enqueueClaudeNavigation(work: () => Promise<void>) {
+  const run = async () => {
+    await work();
+  };
+
+  const next = claudeNavigationQueue.then(run, run);
+  // Keep the queue alive even if the task fails
+  claudeNavigationQueue = next.catch(() => {});
+  await next;
+}
+
 // Function to save headers to chrome.storage
 function saveRequestHeaders(headers: chrome.webRequest.HttpHeader[]) {
   chrome.storage.session.set({ storedRequestHeaders: headers }, () => {
@@ -189,7 +210,9 @@ chrome.runtime.onMessage.addListener(
     } else if (request.action === "executeStepsClaude") {
       (async () => {
         try {
-          await selectBranchClaude(request.steps);
+          await enqueueClaudeNavigation(async () => {
+            await selectBranchClaude(request.navigationTarget);
+          });
           sendResponse({ success: true, completed: true });
         } catch (error: any) {
           sendResponse({ 
@@ -263,6 +286,9 @@ async function triggerNativeArticleEvents() {
 
   if (!currentTab?.id) {
     console.error('No active tab found for triggering native events');
+    return;
+  }
+  if (!currentTab.url || currentTab.url.startsWith('chrome://') || currentTab.url.startsWith('edge://')) {
     return;
   }
 
@@ -856,12 +882,15 @@ async function respondToMessage(childrenIds: string[], message: string) {
   });
 }
 
-async function selectBranchClaude(stepsToTake: any[]) {
+async function selectBranchClaude(navigationTarget: any) {
   try {
-    if (!Array.isArray(stepsToTake)) {
-      throw new Error('stepsToTake must be an array');
+    if (!navigationTarget || !Array.isArray(navigationTarget.levels)) {
+      throw new Error('navigationTarget must be an object with a levels array');
     }
 
+    if (navigationTarget.levels.length === 0) {
+      return;
+    }
 
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tabs || tabs.length === 0) {
@@ -872,103 +901,512 @@ async function selectBranchClaude(stepsToTake: any[]) {
       throw new Error('Current tab has no ID');
     }
 
+    const tabId = currentTab.id;
+    const debuggee = { tabId };
 
-    await chrome.scripting.executeScript({
-      target: { tabId: currentTab.id },
-      func: (stepsToTake) => {
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+	    const isTargetVisible = async (targetNeedle: string | null) => {
+	      if (!targetNeedle) return false;
+	      const results = await chrome.scripting.executeScript({
+	        target: { tabId },
+	        func: (needle: string) => {
+	          const normalize = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
+	          const normalizedNeedle = normalize(needle);
+	          if (!normalizedNeedle) return false;
+	
+	          const wrappers = Array.from(document.querySelectorAll('div.group')).filter((el) =>
+	            el.querySelector('[role="group"][aria-label="Message actions"]')
+	          );
+	          return wrappers.some((wrapper) => {
+	            const wrapperText = ((wrapper as HTMLElement).innerText || wrapper.textContent || '').toString();
+	            return normalize(wrapperText).includes(normalizedNeedle);
+	          });
+	        },
+	        args: [targetNeedle]
+	      });
+	      return Boolean(results[0]?.result);
+	    };
 
-        function findButtons(element: Element | null, maxDepth = 5) {
-          if (!element) {
-            return null; // Base case: Element is null, return null.
+	    const getLevelStateAndClickPoint = async (
+	      anchorText: string | null,
+	      expectedSiblingCount: number,
+	      direction: 'Previous' | 'Next',
+	      siblingNeedles: string[]
+	    ) => {
+	      const results = await chrome.scripting.executeScript({
+	        target: { tabId },
+	        func: (anchorText: string | null, expectedSiblingCount: number, direction: string, siblingNeedles: string[]) => {
+	          const indicatorRegex = /^\s*(\d+)\s*\/\s*(\d+)\s*$/;
+
+	          const canonicalize = (text: string) =>
+	            text
+	              .normalize('NFKC')
+	              .toLowerCase()
+	              .replace(/[\u2018\u2019]/g, "'")
+	              .replace(/[\u201c\u201d]/g, '"')
+	              .replace(/\s+/g, ' ')
+	              .trim();
+
+	          const makeNeedles = (text: string) => {
+	            const normalized = canonicalize(text);
+	            const midStart = Math.max(0, Math.floor(normalized.length / 2) - 40);
+	            return {
+	              head: normalized.slice(0, 80),
+	              mid: normalized.slice(midStart, midStart + 80),
+	            };
+	          };
+
+	          const actionGroups = Array.from(document.querySelectorAll('[role="group"][aria-label="Message actions"]'));
+
+	          const anchorNeedles = anchorText ? makeNeedles(anchorText) : null;
+	          const canonicalSiblingNeedles = (siblingNeedles || []).map((t) => canonicalize(t)).filter(Boolean);
+
+	          const scoreText = (text: string) => {
+	            const wrapperText = canonicalize(text);
+	            if (!wrapperText) return 0;
+
+	            let score = 0;
+	            if (anchorNeedles?.head && wrapperText.includes(anchorNeedles.head)) score += 5;
+	            if (anchorNeedles?.mid && anchorNeedles.mid.length > 20 && wrapperText.includes(anchorNeedles.mid)) score += 3;
+	            for (const needle of canonicalSiblingNeedles) {
+	              if (needle.length < 5) continue;
+	              if (wrapperText.includes(needle)) score += 1;
+	            }
+	            return score;
+	          };
+
+	          const candidates: Array<{
+	            group: Element;
+	            wrapper: Element | null;
+	            score: number;
+	            currentIndex: number;
+	            total: number;
+	            hoverPoint: { x: number; y: number };
+	            clickPoint: { x: number; y: number } | null;
+	            indicatorText: string;
+	          }> = [];
+
+	          for (let i = 0; i < actionGroups.length; i++) {
+	            const group = actionGroups[i] as Element;
+	            const span = Array.from(group.querySelectorAll('span')).find((s) =>
+	              indicatorRegex.test((s.textContent || '').trim())
+	            );
+	            if (!span) continue;
+	
+	            const match = (span.textContent || '').trim().match(indicatorRegex);
+	            if (!match) continue;
+	
+	            const current = parseInt(match[1], 10);
+	            const total = parseInt(match[2], 10);
+	            if (!Number.isFinite(current) || !Number.isFinite(total)) continue;
+	            if (total !== expectedSiblingCount) continue;
+	
+	            const prevButton = group.querySelector('button[aria-label="Previous"]') as HTMLButtonElement | null;
+	            const nextButton = group.querySelector('button[aria-label="Next"]') as HTMLButtonElement | null;
+	
+	            const wrapper = group.closest('div.group');
+	            const wrapperText = wrapper ? ((wrapper as HTMLElement).innerText || wrapper.textContent || '') : (group.textContent || '');
+	            const score = scoreText(wrapperText);
+	
+	            const hoverTarget =
+	              (wrapper && wrapper.querySelector('[data-testid$="message"], [data-testid*="message"]')) ||
+	              wrapper ||
+	              group;
+	            const hoverRect = (hoverTarget as Element).getBoundingClientRect();
+	            const hoverPoint = {
+	              x: hoverRect.left + hoverRect.width / 2,
+	              y: hoverRect.top + Math.min(40, hoverRect.height / 2),
+	            };
+	
+	            let clickPoint: { x: number; y: number } | null = null;
+	            const targetButton = direction === 'Previous' ? prevButton : nextButton;
+	            if (targetButton) {
+	              const buttonRect = targetButton.getBoundingClientRect();
+	              clickPoint = { x: buttonRect.left + buttonRect.width / 2, y: buttonRect.top + buttonRect.height / 2 };
+	            }
+	
+	            candidates.push({
+	              group,
+	              wrapper,
+	              score,
+	              currentIndex: current - 1,
+	              total,
+	              hoverPoint,
+	              clickPoint,
+	              indicatorText: `${current} / ${total}`,
+	            });
+	          }
+
+	          if (candidates.length === 0) {
+	            // No matching sibling-count controls currently rendered
+	            if (anchorText || canonicalSiblingNeedles.length > 0) {
+	              return { error: 'No matching message wrapper found for anchor/sibling needles' };
+	            }
+	            return { error: 'No branch control found for expected sibling count' };
+	          }
+	
+	          candidates.sort((a, b) => {
+	            if (b.score !== a.score) return b.score - a.score;
+	            // Prefer controls closer to the bottom (more likely the active leaf)
+	            const ay = a.wrapper ? a.wrapper.getBoundingClientRect().top : a.group.getBoundingClientRect().top;
+	            const by = b.wrapper ? b.wrapper.getBoundingClientRect().top : b.group.getBoundingClientRect().top;
+	            return by - ay;
+	          });
+	
+	          const best = candidates[0];
+	          const wrapperToScroll = best.wrapper || best.group;
+	          wrapperToScroll.scrollIntoView({ block: 'center', inline: 'nearest' });
+	
+	          if (!best.clickPoint) {
+	            return { error: 'Branch buttons not found under candidate wrapper', hoverPoint: best.hoverPoint, debug: { score: best.score } };
+	          }
+	
+	          return {
+	            error: null,
+	            currentIndex: best.currentIndex,
+	            total: best.total,
+	            hoverPoint: best.hoverPoint,
+	            clickPoint: best.clickPoint,
+	            debug: { score: best.score, indicatorText: best.indicatorText },
+	          };
+	        },
+	        args: [anchorText, expectedSiblingCount, direction, siblingNeedles]
+	      });
+
+	      return results[0]?.result as any;
+	    };
+
+	    const clickAt = async (point: { x: number; y: number }) => {
+	      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+	        type: 'mouseMoved',
+	        x: point.x,
+	        y: point.y,
+	      });
+      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x: point.x,
+        y: point.y,
+        button: 'left',
+        clickCount: 1,
+      });
+      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: point.x,
+        y: point.y,
+        button: 'left',
+        clickCount: 1,
+	      });
+	    };
+	
+	    const hoverAt = async (point: { x: number; y: number }) => {
+	      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+	        type: 'mouseMoved',
+	        x: point.x,
+	        y: point.y,
+	      });
+	    };
+
+    // Attach debugger to send trusted input events
+    debugClaudeNavigation('[selectBranchClaude] Attaching debugger to tab', tabId);
+    try {
+      await chrome.debugger.detach(debuggee);
+    } catch {
+      // Ignore detach errors (e.g., not attached)
+    }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await chrome.debugger.attach(debuggee, '1.3');
+        debugClaudeNavigation('[selectBranchClaude] Debugger attached successfully');
+        break;
+      } catch (error: any) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes('Another debugger is already attached')) {
+          throw error;
+        }
+        if (attempt === 2) {
+          throw error;
+        }
+        await sleep(200);
+      }
+    }
+
+    try {
+      const targetLevels = navigationTarget.levels as Array<{
+        siblingCount: number;
+        targetIndex: number;
+        anchorText: string | null;
+        siblingNeedles: string[];
+      }>;
+
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const input = document.querySelector('[data-testid="chat-input-grid-container"]');
+          let el: Element | null = input ? input.parentElement : null;
+          for (let i = 0; i < 25 && el; i++) {
+            const style = window.getComputedStyle(el);
+            if (['auto', 'scroll'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 100) {
+              (el as HTMLElement).scrollTop = 0;
+              return;
+            }
+            el = el.parentElement;
           }
-        
-          if (maxDepth <= 0) {
-            return null; // Base case: Reached maximum depth, return null.
+        },
+      });
+      await sleep(200);
+
+      const viewportResult = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const input = document.querySelector('[data-testid="chat-input-grid-container"]');
+          let el: Element | null = input ? input.parentElement : null;
+          for (let i = 0; i < 25 && el; i++) {
+            const style = window.getComputedStyle(el);
+            if (['auto', 'scroll'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 100) {
+              return { height: (el as HTMLElement).clientHeight || window.innerHeight };
+            }
+            el = el.parentElement;
           }
-        
-          // Find all buttons inside the current element
-          const buttons = element.querySelectorAll('button');
-        
-          if (buttons.length > 0) {
-            // If buttons are found, convert NodeList to an array and return it
-            return Array.from(buttons);
-          }
-        
-          // Recursive step: Move up to the parent element
-          return findButtons(element.parentElement, maxDepth - 1);
+
+          return { height: window.innerHeight };
+        },
+      });
+      const viewportHeight = viewportResult[0]?.result?.height ?? 800;
+      const scrollDy = Math.floor(viewportHeight * 0.8);
+
+      const targetNeedle: string | null = navigationTarget.targetNeedle || null;
+      if (await isTargetVisible(targetNeedle)) {
+        debugClaudeNavigation('[selectBranchClaude] Target already visible; skipping branch navigation');
+        return;
+      }
+
+	      const getAvailableBranchTotals = async () => {
+	        const results = await chrome.scripting.executeScript({
+	          target: { tabId },
+	          func: () => {
+	            const indicatorRegex = /^\s*(\d+)\s*\/\s*(\d+)\s*$/;
+	            const actionGroups = Array.from(document.querySelectorAll('[role="group"][aria-label="Message actions"]'));
+	            const totals: number[] = [];
+	
+	            for (const group of actionGroups) {
+	              const span = Array.from(group.querySelectorAll('span')).find((s) =>
+	                indicatorRegex.test((s.textContent || '').trim())
+	              );
+	              const match = span ? (span.textContent || '').trim().match(indicatorRegex) : null;
+	              if (!match) continue;
+	              const total = parseInt(match[2], 10);
+	              if (Number.isFinite(total)) totals.push(total);
+	            }
+	            return Array.from(new Set(totals)).sort((a, b) => a - b);
+	          },
+	        });
+	        return (results[0]?.result as number[]) || [];
+	      };
+
+      const pendingLevels = new Set<number>(targetLevels.map((_l, index) => index));
+      const maxIterations = 120;
+      let scrollDirection = -1;
+      let lastScrollTop: number | null = null;
+      let stuckCount = 0;
+      const lastErrors: Record<number, string> = {};
+
+      for (let iteration = 0; iteration < maxIterations; iteration++) {
+        if (await isTargetVisible(targetNeedle)) {
+          debugClaudeNavigation('[selectBranchClaude] Target became visible; stopping');
+          return;
         }
 
-        const waitForDomChange = (): Promise<void> => {
-          return new Promise((resolve) => {
-            const observer = new MutationObserver((mutations) => {
-              if (mutations.some(m => 
-                  m.type === 'childList' && (m.addedNodes.length > 0 || m.removedNodes.length > 0) ||
-                  (m.type === 'attributes' && ['style', 'class'].includes(m.attributeName || '')))) {
-                observer.disconnect();
-                resolve();
-              }
-            });
+        let acted = false;
 
-            const mainContent = document.querySelector('main') || document.body;
-            observer.observe(mainContent, {
-              childList: true,
-              subtree: true,
-              attributes: true,
-              attributeFilter: ['style', 'class', 'aria-hidden']
-            });
-          });
-        };
+	        for (let levelIndex = 0; levelIndex < targetLevels.length; levelIndex++) {
+	          if (!pendingLevels.has(levelIndex)) continue;
+	
+	          const level = targetLevels[levelIndex];
+	
+	          let located = await getLevelStateAndClickPoint(
+	            level.anchorText,
+	            level.siblingCount,
+	            'Next',
+	            level.siblingNeedles || []
+	          );
+	
+	          if (located?.error && located?.hoverPoint) {
+	            // Some Claude UIs only render branch controls after hover/focus
+	            await hoverAt(located.hoverPoint);
+	            await sleep(120);
+	            located = await getLevelStateAndClickPoint(
+	              level.anchorText,
+	              level.siblingCount,
+	              'Next',
+	              level.siblingNeedles || []
+	            );
+	          }
 
+	          if (!located || located.error) {
+	            lastErrors[levelIndex] = located?.error || 'Unknown error locating branch control';
+	            continue;
+	          }
 
-        // Process all steps as fast as possible
-        const processSteps = async () => {
-          try {
-            for (const step of stepsToTake) {
-              if (!step.nodeId) {
-                throw new Error('Step missing nodeId');
-                
-              }
+          const currentIndex = (located as { currentIndex: number }).currentIndex;
 
-              // Find the target element
-              const normalizedTargetText = step.nodeText.trim().replace(/\s+/g, ' ');
-              const containers = document.querySelectorAll('.grid-cols-1');
-              
-              let element = null;
-              for (const container of containers) {
-                const containerText = container.textContent?.trim().replace(/\s+/g, ' ');
-                if (containerText === normalizedTargetText) {
-                  element = container; // Return the element that matches
-                }
-              }
-
-              
-              //0 is edit, 1 is previous, 2 is next
-              let buttonIndex = step.stepsLeft > 0 ? 1 : 2;
-
-              const buttons = findButtons(element);
-
-              if (!buttons) {
-                throw new Error(`Button with required aria-label not found for nodeId: ${step.nodeId}`);
-              }
-
-              const button = buttons[buttonIndex];
-
-              // Click the button and wait for DOM changes
-              button.click();
-              await waitForDomChange();
-            }
-          } catch (error) {
-            console.error('Error processing steps:', error);
-            throw error;
+          if (currentIndex === level.targetIndex) {
+            debugClaudeNavigation(`[selectBranchClaude] Level ${levelIndex} satisfied (${currentIndex + 1}/${level.siblingCount})`);
+            pendingLevels.delete(levelIndex);
+            continue;
           }
-        };
 
-        return processSteps();
-      },
-      args: [stepsToTake]
-    });
+          const direction = currentIndex < level.targetIndex ? 'Next' : 'Previous';
+	          let state = await getLevelStateAndClickPoint(
+	            level.anchorText,
+	            level.siblingCount,
+	            direction,
+	            level.siblingNeedles || []
+	          );
+
+	          if (state?.error && state?.hoverPoint) {
+	            await hoverAt(state.hoverPoint);
+	            await sleep(120);
+	            state = await getLevelStateAndClickPoint(
+	              level.anchorText,
+	              level.siblingCount,
+	              direction,
+	              level.siblingNeedles || []
+	            );
+	          }
+	
+	          if (!state || state.error || !state.clickPoint) {
+	            lastErrors[levelIndex] = state?.error || 'Unknown error acquiring click point';
+	            continue;
+	          }
+
+	          if (state.hoverPoint) {
+	            await hoverAt(state.hoverPoint);
+	            await sleep(100);
+	          }
+
+          debugClaudeNavigation(
+            `[selectBranchClaude] Iter ${iteration + 1}/${maxIterations} ` +
+              `Level ${levelIndex} ${direction} ` +
+              `(${currentIndex + 1}/${level.siblingCount} -> ${level.targetIndex + 1}/${level.siblingCount})`
+          );
+
+          await clickAt(state.clickPoint);
+          await sleep(200);
+          acted = true;
+          break;
+        }
+
+        if (await isTargetVisible(targetNeedle)) {
+          debugClaudeNavigation('[selectBranchClaude] Target became visible; stopping');
+          return;
+        }
+
+        if (pendingLevels.size === 0) {
+          debugClaudeNavigation('[selectBranchClaude] All levels satisfied but target not visible; stopping');
+          return;
+        }
+
+        if (!acted) {
+          if (iteration % 10 === 0) {
+            const availableTotals = await getAvailableBranchTotals();
+            debugClaudeNavigation(
+              `[selectBranchClaude] No actionable controls (available totals: ${JSON.stringify(availableTotals)}); scrolling`
+            );
+          }
+
+          // Scan the chat scroller systematically to coax virtualization into rendering different message wrappers
+          const scrollResult = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: (dy: number) => {
+              const input = document.querySelector('[data-testid="chat-input-grid-container"]');
+              let el: Element | null = input ? input.parentElement : null;
+              let scroller: HTMLElement | null = null;
+
+              for (let i = 0; i < 25 && el; i++) {
+                const style = window.getComputedStyle(el);
+                if (['auto', 'scroll'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 100) {
+                  scroller = el as HTMLElement;
+                  break;
+                }
+                el = el.parentElement;
+              }
+
+              if (!scroller) {
+                return { scrollTop: null, maxScrollTop: null };
+              }
+
+              const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+              const nextScrollTop = Math.max(0, Math.min(maxScrollTop, scroller.scrollTop + dy));
+              scroller.scrollTop = nextScrollTop;
+              return { scrollTop: scroller.scrollTop, maxScrollTop };
+            },
+            args: [scrollDy * scrollDirection],
+          });
+
+          const scrollTop = scrollResult[0]?.result?.scrollTop ?? null;
+          const maxScrollTop = scrollResult[0]?.result?.maxScrollTop ?? null;
+
+          if (scrollTop !== null) {
+            if (lastScrollTop !== null && Math.abs(scrollTop - lastScrollTop) < 2) {
+              stuckCount += 1;
+            } else {
+              stuckCount = 0;
+            }
+            lastScrollTop = scrollTop;
+
+            if (maxScrollTop !== null) {
+              if (scrollTop <= 1 || scrollTop >= maxScrollTop - 1) {
+                scrollDirection = scrollDirection * -1;
+              }
+            }
+          }
+
+          if (stuckCount > 8) {
+            // If we can't programmatically scroll, don't hard-fail; rely on maxIterations for exit
+            stuckCount = 0;
+            scrollDirection = scrollDirection * -1;
+          }
+
+          await sleep(220);
+        }
+      }
+
+      const availableTotals = await getAvailableBranchTotals();
+      const missing = Array.from(pendingLevels).map((levelIndex) => ({
+        levelIndex,
+        siblingCount: targetLevels[levelIndex].siblingCount,
+        targetIndex: targetLevels[levelIndex].targetIndex,
+        lastError: lastErrors[levelIndex] || null,
+      }));
+      throw new Error(
+        `Exceeded max iterations while navigating Claude branches. ` +
+          `Available totals: ${JSON.stringify(availableTotals)}. ` +
+          `Pending levels: ${JSON.stringify(missing)}`
+      );
+    } finally {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch {
+        // Ignore detach errors
+      }
+    }
   } catch (error) {
+    try {
+      const message = error instanceof Error ? error.message : String(error);
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const currentTab = tabs[0];
+      if (currentTab?.id) {
+        await chrome.scripting.executeScript({
+          target: { tabId: currentTab.id },
+          func: (msg: string) => console.error('[ChatTree][selectBranchClaude]', msg),
+          args: [message],
+        });
+      }
+    } catch {
+      // Ignore console emit errors
+    }
     console.error('selectBranchClaude failed:', error);
     throw error;
   }
@@ -1136,9 +1574,13 @@ async function selectBranch(stepsToTake: any[]) {
 async function goToTarget(targetId: string) {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const currentTab = tabs[0];
+  if (!currentTab?.id) {
+    console.error('goToTarget: No active tab found');
+    return;
+  }
 
   await chrome.scripting.executeScript({
-    target: { tabId: currentTab.id ?? 0 },
+    target: { tabId: currentTab.id },
     func: (targetId) => {
       const element = document.querySelector(`[data-message-id="${targetId}"]`);
       if (element) {
@@ -1152,9 +1594,13 @@ async function goToTarget(targetId: string) {
 async function goToTargetClaude(targetText: string) {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const currentTab = tabs[0];
+  if (!currentTab?.id) {
+    console.error('goToTargetClaude: No active tab found');
+    return;
+  }
 
   await chrome.scripting.executeScript({
-    target: { tabId: currentTab.id ?? 0 },
+    target: { tabId: currentTab.id },
     func: (targetText) => {
       function htmlTextEqualsIgnoringArtifacts(html: string, text: string): boolean {
         const decodeEntities = (str: string) =>
@@ -1620,4 +2066,3 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((error) => console.error(error));
-

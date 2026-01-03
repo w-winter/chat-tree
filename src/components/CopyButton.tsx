@@ -1,11 +1,11 @@
-import { OpenAINode } from '../types/interfaces';
 import { useState } from 'react';
 import { CopyModal } from './CopyModal';
+import { ClaudeNode, ConversationProvider, NavigationRequest, OpenAINode } from '../types/interfaces';
 
 interface CopyButtonProps {
-  nodes: OpenAINode[];
-  onNodeClick?: (nodeId: string) => void;
-  provider?: 'openai' | 'claude';
+  nodes: OpenAINode[] | ClaudeNode[];
+  onNodeClick?: (nodeId: string) => Promise<NavigationRequest> | NavigationRequest;
+  provider?: ConversationProvider;
 }
 
 export const CopyButton = ({ nodes, onNodeClick, provider = 'openai' }: CopyButtonProps) => {
@@ -14,8 +14,10 @@ export const CopyButton = ({ nodes, onNodeClick, provider = 'openai' }: CopyButt
   const handleCopy = async (selectedNodeIds: string[]) => {
     const selectedNodes = nodes.filter(node => selectedNodeIds.includes(node.id));
     const markdown = selectedNodes.map(node => {
-      const role = node.data?.role === 'user' ? 'You' : 'Assistant';
-      const content = node.data?.label || '';
+      const isUser = node.data?.role === 'user' || node.data?.role === 'human';
+      const role = isUser ? 'You' : 'Assistant';
+      const content =
+        provider === 'openai' ? node.data?.label || '' : (node as ClaudeNode).data?.text || node.data?.label || '';
       return `**${role}**: ${content}`;
     }).join('\n\n');
 

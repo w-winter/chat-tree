@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { ContextMenuProps } from '../types/interfaces';
+import { ClaudeNavigationTarget, ContextMenuProps, OpenAINavigationStep } from '../types/interfaces';
 
 export const ContextMenu = (props: ContextMenuProps) => {
     // Group state declarations
@@ -97,18 +97,25 @@ export const ContextMenu = (props: ContextMenuProps) => {
        
         if (!props.messageId) return;
 
-        const steps = props.onNodeClick(props.messageId);
-        if (!steps) return;
-
         const action = props.provider === 'openai' ? 'executeSteps' : 'executeStepsClaude';
 
-
         try {
-            const execResponse = await chrome.runtime.sendMessage({ 
-                action: action, 
-                steps: steps,
-                requireCompletion: true
-            });
+            const navigation = await props.onNodeClick(props.messageId);
+            if (!navigation) return;
+
+            const execResponse = await chrome.runtime.sendMessage(
+                props.provider === 'openai'
+                    ? {
+                        action: action,
+                        steps: navigation as OpenAINavigationStep[],
+                        requireCompletion: true
+                    }
+                    : {
+                        action: action,
+                        navigationTarget: navigation as ClaudeNavigationTarget,
+                        requireCompletion: true
+                    }
+            );
 
             if (!execResponse.completed) {
                 throw new Error('Background operation did not complete successfully');

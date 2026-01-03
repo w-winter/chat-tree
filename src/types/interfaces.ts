@@ -186,12 +186,34 @@ export interface ContextMenuProps {
     bottom: number | boolean;
     hidden?: boolean;
     onClick?: () => void;
-    onNodeClick: (messageId: string) => any[]; // Function to handle node clicks
+    onNodeClick: (messageId: string) => Promise<NavigationRequest> | NavigationRequest; // Function to handle node clicks
     onRefresh: () => void; // Function to refresh something
     refreshNodes: () => void; // Function to refresh nodes
 }
 
 export type ConversationProvider = 'openai' | 'claude';
+
+// --- Navigation payloads (background actions) ---
+export interface OpenAINavigationStep {
+  nodeId: string;
+  stepsLeft: number;
+  stepsRight: number;
+  role: string;
+}
+
+export interface ClaudeNavigationLevel {
+  siblingCount: number;
+  targetIndex: number; // 0-indexed
+  anchorText: string | null; // Parent message text used to locate the correct branch control in the DOM
+  siblingNeedles: string[]; // Short text needles from sibling messages to disambiguate branch controls
+}
+
+export interface ClaudeNavigationTarget {
+  levels: ClaudeNavigationLevel[];
+  targetNeedle: string | null; // Short text needle for the target message to allow early-success checks
+}
+
+export type NavigationRequest = OpenAINavigationStep[] | ClaudeNavigationTarget;
 
 // Common interfaces for both providers
 export interface BaseNode {
