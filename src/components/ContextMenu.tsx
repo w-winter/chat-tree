@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { ContextMenuProps } from '../types/interfaces';
+import { ClaudeNavigationTarget, ContextMenuProps, OpenAINavigationStep } from '../types/interfaces';
 
 export const ContextMenu = (props: ContextMenuProps) => {
     // Group state declarations
@@ -97,28 +97,51 @@ export const ContextMenu = (props: ContextMenuProps) => {
        
         if (!props.messageId) return;
 
-        const steps = props.onNodeClick(props.messageId);
-        if (!steps) return;
-
         const action = props.provider === 'openai' ? 'executeSteps' : 'executeStepsClaude';
 
-
         try {
-            const execResponse = await chrome.runtime.sendMessage({ 
-                action: action, 
-                steps: steps,
-                requireCompletion: true
-            });
+            const navigation = await props.onNodeClick(props.messageId);
+            if (!navigation) return;
 
-            if (!execResponse.completed) {
+            const execResponse = await chrome.runtime.sendMessage(
+                props.provider === 'openai'
+                    ? {
+                        action: action,
+                        steps: navigation as OpenAINavigationStep[],
+                        requireCompletion: true
+                    }
+                    : {
+                        action: action,
+                        navigationTarget: navigation as ClaudeNavigationTarget,
+                        requireCompletion: true
+                    }
+            );
+
+            const completed =
+                typeof execResponse === 'object' &&
+                execResponse !== null &&
+                'completed' in execResponse &&
+                Boolean((execResponse as { completed?: unknown }).completed);
+
+            if (!completed) {
                 throw new Error('Background operation did not complete successfully');
             }
 
             props.onRefresh();
-            await chrome.runtime.sendMessage({ 
+            const goToResponse = await chrome.runtime.sendMessage({
                 action: props.provider === 'openai' ? "goToTarget" : "goToTargetClaude", 
                 targetId: props.provider === 'openai' ? props.messageId : props.message 
             });
+
+            const goToCompleted =
+                typeof goToResponse === 'object' &&
+                goToResponse !== null &&
+                'completed' in goToResponse &&
+                Boolean((goToResponse as { completed?: unknown }).completed);
+
+            if (!goToCompleted) {
+                console.warn('goToTarget did not complete successfully:', goToResponse);
+            }
         } catch (error) {
             console.error('Error executing steps:', error);
         }

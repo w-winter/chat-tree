@@ -1,90 +1,67 @@
-import { ClaudeNode } from '../types/interfaces';
+import { ClaudeNavigationTarget, ClaudeNode } from '../types/interfaces';
 
-export const calculateStepsClaude = (
-  nodes: ClaudeNode[],
-  targetId: string,
-  lastActiveChildMap: Record<string, string>
-) => {
-  
-  
-  // Tracks navigation steps needed to reach target node
-  const stepsToTake: Array<{
-    nodeText: string;
-    nodeId: string;
-    stepsLeft: number;
-    stepsRight: number;
-  }> = [];
+const normalizeText = (text: string) => text.replace(/\s+/g, ' ').trim();
 
-  let currentNode = nodes.find((node) => node.id === targetId);
+const makeNeedles = (text: string): string[] => {
+  const normalized = normalizeText(text);
+  if (!normalized) return [];
 
-  if (!currentNode) {
-    return [];
+  const needles: string[] = [];
+
+  const head = normalized.slice(0, 80);
+  if (head) needles.push(head);
+
+  if (normalized.length > 240) {
+    const midStart = Math.max(0, Math.floor(normalized.length / 2) - 40);
+    const mid = normalized.slice(midStart, midStart + 80);
+    if (mid && !needles.includes(mid)) needles.push(mid);
+
+    const tail = normalized.slice(-80);
+    if (tail && !needles.includes(tail)) needles.push(tail);
   }
 
- 
-  // Navigate up the tree while nodes are hidden
-  while (currentNode?.data?.hidden) {
-    
-    const parent = nodes.find((n) => n.id === currentNode?.parent);
-    if (!parent || !parent.children || parent.children.length === 0) {
+  return needles;
+};
+
+const makeNeedle = (text: string) => makeNeedles(text)[0] || null;
+
+export const computeNavigationTargetClaude = (nodes: ClaudeNode[], targetId: string): ClaudeNavigationTarget => {
+  const levels: ClaudeNavigationTarget['levels'] = [];
+
+  let currentNode = nodes.find((node) => node.id === targetId);
+  if (!currentNode) {
+    return { levels, targetNeedle: null, targetNeedles: [] };
+  }
+
+  const targetText = currentNode.data?.text || currentNode.data?.label || '';
+  const targetNeedles = makeNeedles(targetText);
+  const targetNeedle = targetNeedles[0] || null;
+
+  while (currentNode) {
+    const parent = nodes.find((node) => node.id === currentNode?.parent);
+    if (!parent || !Array.isArray(parent.children) || parent.children.length === 0) {
       break;
     }
 
-    const childIndex = parent.children.indexOf(currentNode.id);
-    if (childIndex === -1) {
+    const siblingCount = parent.children.length;
+    const targetIndex = parent.children.indexOf(currentNode.id);
+    if (targetIndex === -1) {
       break;
     }
 
-    let activeChildIndex = -1;
+    if (siblingCount > 1) {
+      const siblingNeedles = parent.children
+        .map((childId) => nodes.find((node) => node.id === childId))
+        .map((siblingNode) => (siblingNode ? makeNeedle(siblingNode.data?.text || siblingNode.data?.label || '') : null))
+        .filter((needle): needle is string => Boolean(needle))
+        .slice(0, 10);
 
-    const cachedActiveChildId = lastActiveChildMap[parent.id];
-    if (cachedActiveChildId) {
-      const cachedIndex = parent.children.indexOf(cachedActiveChildId);
-      if (cachedIndex !== -1) {
-        activeChildIndex = cachedIndex;
-      }
-    }
-
-    if (activeChildIndex === -1) {
-      activeChildIndex = parent.children.findIndex(
-        (childId) => nodes.find((node) => node.id === childId)?.data?.hidden === false
-      );
-    }
-
-    if (activeChildIndex === -1 && parent.children.length > 0) {
-      activeChildIndex = 0;
-    }
-
-    if (activeChildIndex !== -1 && activeChildIndex !== childIndex) {
-      const stepsCount = Math.abs(childIndex - activeChildIndex);
-      const moveRight = childIndex > activeChildIndex;
-     
-      let tempStepsToTake = [];
-      for (let i = 0; i < stepsCount; i++) {
-        const currentStepNodeIndex = activeChildIndex + (moveRight ? i : -i);
-        const currentStepNodeId = parent.children[currentStepNodeIndex];
-        const currentStepNode = nodes.find(n => n.id === currentStepNodeId);
-
-        if (currentStepNode) {
-          tempStepsToTake.push({
-            nodeText: currentStepNode.data.text,
-            nodeId: currentStepNode.id,
-            stepsLeft: moveRight ? 0 : 1,
-            stepsRight: moveRight ? 1 : 0,
-          });
-         
-        }
-      }
-
-      stepsToTake.push(...tempStepsToTake.reverse());
-    } else if (activeChildIndex === -1) {
-      chrome.runtime.sendMessage({ action: "log", message: "No active child index found" });
+      const parentAnchorText = parent.data?.text ? normalizeText(parent.data.text).slice(0, 400) : null;
+      levels.unshift({ siblingCount, targetIndex, anchorText: parentAnchorText, siblingNeedles });
     }
 
     currentNode = parent;
-   
   }
 
- 
-  return stepsToTake.reverse();
-}; 
+  return { levels, targetNeedle, targetNeedles };
+};

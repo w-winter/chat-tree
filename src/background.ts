@@ -1,7 +1,31 @@
+import type { ClaudeNavigationTarget } from './types/interfaces';
+
 // Global variables for API endpoints and IDs
 const CHATGPT_ORIGIN = 'https://chatgpt.com';
 const CLAUDE_ORIGIN = 'https://claude.ai';
 let claudeOrgId: string | null = null;
+
+const DEBUG_CLAUDE_NAVIGATION = false;
+const debugClaudeNavigation = (...args: unknown[]) => {
+  if (DEBUG_CLAUDE_NAVIGATION) {
+    console.log(...args);
+  }
+};
+
+let claudeNavigationQueue: Promise<void> = Promise.resolve();
+
+async function enqueueClaudeNavigation(work: () => Promise<void>) {
+  const run = async () => {
+    await work();
+  };
+
+  const next = claudeNavigationQueue.then(run, run);
+  // Keep the queue alive even if the task fails
+  claudeNavigationQueue = next.catch((error) => {
+    console.error('[ChatTree] Claude navigation task failed:', error);
+  });
+  await next;
+}
 
 // Function to save headers to chrome.storage
 function saveRequestHeaders(headers: chrome.webRequest.HttpHeader[]) {
@@ -64,7 +88,7 @@ function captureClaudeOrgId() {
         }
       }
     },
-    { 
+    {
       urls: [CLAUDE_ORG_PATTERN],
       types: ["xmlhttprequest"] as chrome.webRequest.ResourceType[]
     }
@@ -79,7 +103,7 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ headers });
       });
       return true;
-    } 
+    }
     else if (request.action === "fetchConversationHistory") {
       fetchConversationHistory()
         .then(data => {
@@ -98,7 +122,7 @@ chrome.runtime.onMessage.addListener(
           sendResponse({ success: false, error: "Could not get current tab URL" });
           return;
         }
-        
+
         const url = new URL(tabs[0].url);
         if (url.origin === CHATGPT_ORIGIN) {
           checkNodesExistence(request.nodeIds)
@@ -120,11 +144,11 @@ chrome.runtime.onMessage.addListener(
           sendResponse({ success: false, error: "Could not get current tab URL" });
           return;
         }
-        
+
         const url = new URL(tabs[0].url);
         if (url.origin === CLAUDE_ORIGIN) {
-        
-      
+
+
           if (!request.nodeTexts || !Array.isArray(request.nodeTexts)) {
             console.error('Invalid nodeTexts:', request.nodeTexts);
             sendResponse({ success: false, error: "Invalid nodeTexts provided" });
@@ -149,10 +173,10 @@ chrome.runtime.onMessage.addListener(
           await editMessage(request.messageId, request.message);
           sendResponse({ success: true, completed: true });
         } catch (error: any) {
-          sendResponse({ 
-            success: false, 
-            completed: false, 
-            error: error.message 
+          sendResponse({
+            success: false,
+            completed: false,
+            error: error.message
           });
         }
       })();
@@ -164,10 +188,10 @@ chrome.runtime.onMessage.addListener(
           await respondToMessage(request.childrenIds, request.message);
           sendResponse({ success: true, completed: true });
         } catch (error: any) {
-          sendResponse({ 
-            success: false, 
-            completed: false, 
-            error: error.message 
+          sendResponse({
+            success: false,
+            completed: false,
+            error: error.message
           });
         }
       })();
@@ -178,10 +202,10 @@ chrome.runtime.onMessage.addListener(
           await selectBranch(request.steps);
           sendResponse({ success: true, completed: true });
         } catch (error: any) {
-          sendResponse({ 
-            success: false, 
-            completed: false, 
-            error: error.message 
+          sendResponse({
+            success: false,
+            completed: false,
+            error: error.message
           });
         }
       })();
@@ -189,26 +213,38 @@ chrome.runtime.onMessage.addListener(
     } else if (request.action === "executeStepsClaude") {
       (async () => {
         try {
-          await selectBranchClaude(request.steps);
+          await enqueueClaudeNavigation(async () => {
+            await selectBranchClaude(request.navigationTarget);
+          });
           sendResponse({ success: true, completed: true });
         } catch (error: any) {
-          sendResponse({ 
-            success: false, 
-            completed: false, 
-            error: error.message 
+          sendResponse({
+            success: false,
+            completed: false,
+            error: error.message
           });
         }
       })();
       return true; // Keep message channel open for async response
     } else if (request.action === "goToTarget") {
-
-      goToTarget(request.targetId);
-      sendResponse({ success: true });
+      (async () => {
+        try {
+          const found = await goToTarget(request.targetId);
+          sendResponse({ success: found, completed: found });
+        } catch (error: any) {
+          sendResponse({ success: false, completed: false, error: error.message });
+        }
+      })();
       return true;
-
     } else if (request.action === "goToTargetClaude") {
-      goToTargetClaude(request.targetId);
-      sendResponse({ success: true });
+      (async () => {
+        try {
+          const found = await goToTargetClaude(request.targetId);
+          sendResponse({ success: found, completed: found });
+        } catch (error: any) {
+          sendResponse({ success: false, completed: false, error: error.message });
+        }
+      })();
       return true;
     } else if (request.action === "log") {
       console.log(request.message);
@@ -229,10 +265,10 @@ chrome.runtime.onMessage.addListener(
           await respondToMessageClaude(request.childrenIds, request.message);
           sendResponse({ success: true, completed: true });
         } catch (error: any) {
-          sendResponse({ 
-            success: false, 
-            completed: false, 
-            error: error.message 
+          sendResponse({
+            success: false,
+            completed: false,
+            error: error.message
           });
         }
       })();
@@ -243,10 +279,10 @@ chrome.runtime.onMessage.addListener(
           await editMessageClaude(request.messageId, request.message);
           sendResponse({ success: true, completed: true });
         } catch (error: any) {
-          sendResponse({ 
-            success: false, 
-            completed: false, 
-            error: error.message 
+          sendResponse({
+            success: false,
+            completed: false,
+            error: error.message
           });
         }
       })();
@@ -263,6 +299,9 @@ async function triggerNativeArticleEvents() {
 
   if (!currentTab?.id) {
     console.error('No active tab found for triggering native events');
+    return;
+  }
+  if (!currentTab.url || currentTab.url.startsWith('chrome://') || currentTab.url.startsWith('edge://')) {
     return;
   }
 
@@ -320,7 +359,7 @@ async function triggerNativeArticleEvents() {
 
       function processElementRecursively(element: Element, depth: number) {
         if (depth > 5) return; // Stop at depth 5
-        
+
         // Trigger events on the current element
         triggerNativeEvents(element);
 
@@ -337,17 +376,17 @@ async function triggerNativeArticleEvents() {
 
       function startPollingForNewArticles() {
         let previousArticleCount = document.querySelectorAll('article[data-testid^="conversation-turn-"]').length;
-        
+
         const pollingInterval = setInterval(() => {
           const currentArticleCount = document.querySelectorAll('article[data-testid^="conversation-turn-"]').length;
-          
+
           if (currentArticleCount > previousArticleCount) {
             findAndTriggerEvents();
           }
-          
+
           previousArticleCount = currentArticleCount;
         }, 2000);
-        
+
         setTimeout(() => {
           clearInterval(pollingInterval);
         }, 30000);
@@ -380,7 +419,7 @@ async function triggerNativeArticleEvents() {
               }
             }
           });
-          
+
           chatObserver.observe(chatContainer, { childList: true, subtree: true });
         }
       }
@@ -390,7 +429,7 @@ async function triggerNativeArticleEvents() {
       const isInitialized = document.body.hasAttribute('data-events-initialized');
       if (!isInitialized) {
         document.body.setAttribute('data-events-initialized', 'true');
-        
+
         // Ensure DOM is ready
         if (document.readyState === "loading") {
           document.addEventListener("DOMContentLoaded", init);
@@ -412,12 +451,12 @@ async function fetchConversationHistory() {
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const currentTab = tabs[0];
-    
+
     if (!currentTab?.url) {
       console.log('No active tab URL found');
       return null;
     }
-    
+
     const url = new URL(currentTab.url);
     const conversationId = url.pathname.split('/').pop();
 
@@ -431,15 +470,15 @@ async function fetchConversationHistory() {
           credentials: 'include' // This will include cookies
         }
       );
-      
+
       const data = await response.json();
       if (!data) {
         throw new Error('No data received from Claude API');
       }
-      
+
       // Trigger native events after fetching conversation history
       await triggerNativeArticleEvents();
-      
+
       return data;
     } else if (url.origin === CHATGPT_ORIGIN) {
       // ChatGPT API endpoint - needs headers
@@ -466,15 +505,15 @@ async function fetchConversationHistory() {
         method: 'GET',
         headers: headersList,
       });
-      
+
       const data = await response.json();
       if (!data) {
         throw new Error('No data received from ChatGPT API');
       }
-      
+
       // Trigger native events after fetching conversation history
       await triggerNativeArticleEvents();
-      
+
       return data;
     } else {
       throw new Error('Unsupported chat platform');
@@ -497,7 +536,7 @@ async function checkNodesExistence(nodeIds: string[]) {
       },
       args: [nodeIds]  // Pass nodeIds as an argument to the injected function
     });
-    
+
     return results[0].result;  // Returns array of nodeIds that exist in the DOM
   } catch (error) {
     console.error('Error in checkNodesExistence:', error);
@@ -546,7 +585,7 @@ async function checkNodesExistenceClaude(nodeTexts: string[] | undefined) {
             .replace(/^•\s*/gm, '')       // remove bullets
             .replace(/\s+/g, ' ')         // collapse all whitespace
             .trim();
-        
+
 
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
@@ -554,19 +593,19 @@ async function checkNodesExistenceClaude(nodeTexts: string[] | undefined) {
         function getVisibleTextWithSpacing(node: Node, listStack: number[] = []): string {
           let result = '';
 
-        
+
           for (const child of node.childNodes) {
             if (child.nodeType === Node.TEXT_NODE) {
               result += child.textContent || '';
             } else if (child.nodeType === Node.ELEMENT_NODE) {
               const el = child as HTMLElement;
               const tag = el.tagName.toLowerCase();
-        
+
               if (tag === 'br') {
                 result += '\n';
                 continue;
               }
-        
+
               if (tag === 'ol') {
                 const startAttr = parseInt(el.getAttribute('start') || '1', 10);
                 listStack.push(startAttr);
@@ -574,14 +613,14 @@ async function checkNodesExistenceClaude(nodeTexts: string[] | undefined) {
                 listStack.pop();
                 continue;
               }
-        
+
               if (tag === 'ul') {
                 listStack.push(-1); // sentinel for unordered
                 result += '\n' + getVisibleTextWithSpacing(el, listStack) + '\n';
                 listStack.pop();
                 continue;
               }
-        
+
               if (tag === 'li') {
                 let bullet = '• ';
                 if (listStack[listStack.length - 1] !== -1) {
@@ -590,17 +629,17 @@ async function checkNodesExistenceClaude(nodeTexts: string[] | undefined) {
                 result += bullet + getVisibleTextWithSpacing(el, listStack).trim() + '\n';
                 continue;
               }
-        
+
               result += getVisibleTextWithSpacing(el, listStack);
               if (['p', 'div', 'section', 'article', 'li'].includes(tag)) {
                 result += '\n';
               }
             }
           }
-        
+
           return result;
         }
-        
+
         const htmlText = getVisibleTextWithSpacing(doc.body);
 
         const normalizedHTML = normalize(htmlText);
@@ -611,7 +650,7 @@ async function checkNodesExistenceClaude(nodeTexts: string[] | undefined) {
 
       return texts.map(expectedText => {
         const containers = document.querySelectorAll('.grid-cols-1');
-        
+
         for (const container of containers) {
           const containerHTML = container.innerHTML;
           if (htmlTextEqualsIgnoringArtifacts(containerHTML, expectedText)) {
@@ -679,7 +718,7 @@ async function editMessage(messageId: string, message: string) {
           const isAssistant = element.getAttribute('data-message-author-role') === 'assistant';
           const buttonIndex = isAssistant ? buttons.length - 7 : 1; // edit is always second button for user, or 7th from end for assistant
           button = buttons[buttonIndex];
-          
+
           if (!button) {
             attempts++;
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -687,7 +726,7 @@ async function editMessage(messageId: string, message: string) {
         }
 
         if (!button) throw new Error('Edit button not found');
-        
+
         button.click();
         await waitForDomChange(buttonDiv);
 
@@ -695,15 +734,15 @@ async function editMessage(messageId: string, message: string) {
         let textArea = buttonDiv.querySelector("textarea");
         let textAreaAttempts = 0;
         const maxTextAreaAttempts = 5;
-        
+
         while (!textArea && textAreaAttempts < maxTextAreaAttempts) {
           await new Promise(resolve => setTimeout(resolve, 100));
           textArea = buttonDiv.querySelector("textarea");
           textAreaAttempts++;
         }
-        
+
         if (!textArea) throw new Error('Textarea not found after multiple attempts');
-        
+
         textArea.value = message;
         textArea.dispatchEvent(new Event('input', { bubbles: true }));
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -712,20 +751,20 @@ async function editMessage(messageId: string, message: string) {
         let currentElement: Element | null = textArea;
         let sendButton: HTMLButtonElement | null = null;
         let iterations = 0;
-        
+
         while (currentElement && iterations < 10) {
           const buttons = Array.from(currentElement.querySelectorAll('button'));
           // Send button is always the second button in the textarea container
           sendButton = buttons[1] as HTMLButtonElement || null;
           if (sendButton) break;
-          
+
           currentElement = currentElement.parentElement;
           iterations++;
         }
 
         if (!sendButton) throw new Error('Send button not found');
         sendButton.click();
-        
+
         // Wait for final update after sending
         await waitForDomChange(buttonDiv, 2000);
       };
@@ -795,7 +834,7 @@ async function respondToMessage(childrenIds: string[], message: string) {
           const isAssistant = element.getAttribute('data-message-author-role') === 'assistant';
           const buttonIndex = isAssistant ? buttons.length - 7 : 1; // edit is always second button for user, or 7th from end for assistant
           button = buttons[buttonIndex];
-          
+
           if (!button) {
             attempts++;
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -811,15 +850,15 @@ async function respondToMessage(childrenIds: string[], message: string) {
         let textArea = buttonDiv.querySelector("textarea");
         let textAreaAttempts = 0;
         const maxTextAreaAttempts = 5;
-        
+
         while (!textArea && textAreaAttempts < maxTextAreaAttempts) {
           await new Promise(resolve => setTimeout(resolve, 100));
           textArea = buttonDiv.querySelector("textarea");
           textAreaAttempts++;
         }
-        
+
         if (!textArea) throw new Error('Textarea not found after multiple attempts');
-        
+
         textArea.value = message;
         textArea.dispatchEvent(new Event('input', { bubbles: true }));
         element.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -856,12 +895,15 @@ async function respondToMessage(childrenIds: string[], message: string) {
   });
 }
 
-async function selectBranchClaude(stepsToTake: any[]) {
+async function selectBranchClaude(navigationTarget: ClaudeNavigationTarget) {
   try {
-    if (!Array.isArray(stepsToTake)) {
-      throw new Error('stepsToTake must be an array');
+    if (!navigationTarget || !Array.isArray(navigationTarget.levels)) {
+      throw new Error('navigationTarget must be an object with a levels array');
     }
 
+    if (navigationTarget.levels.length === 0) {
+      return;
+    }
 
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tabs || tabs.length === 0) {
@@ -872,103 +914,566 @@ async function selectBranchClaude(stepsToTake: any[]) {
       throw new Error('Current tab has no ID');
     }
 
+    const tabId = currentTab.id;
+    const debuggee = { tabId };
 
-    await chrome.scripting.executeScript({
-      target: { tabId: currentTab.id },
-      func: (stepsToTake) => {
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const stringifyError = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+    const safeDetach = async (context: string) => {
+      try {
+        await chrome.debugger.detach(debuggee);
+      } catch (error) {
+        const message = stringifyError(error).toLowerCase();
+        const expected =
+          message.includes('not attached') || message.includes('no debugger') || message.includes('cannot detach');
+        if (!expected) {
+          debugClaudeNavigation('[selectBranchClaude] Unexpected detach error:', context, message);
+        }
+      }
+    };
 
-        function findButtons(element: Element | null, maxDepth = 5) {
-          if (!element) {
-            return null; // Base case: Element is null, return null.
+    const getTargetNeedles = () => {
+      const needles: string[] = [];
+      if (navigationTarget.targetNeedle) needles.push(navigationTarget.targetNeedle);
+      if (Array.isArray(navigationTarget.targetNeedles)) needles.push(...navigationTarget.targetNeedles);
+      return Array.from(new Set(needles.map((n) => n.trim()).filter(Boolean))).slice(0, 3);
+    };
+
+    const isTargetVisible = async (needles: string[]) => {
+      const usableNeedles = (needles || []).map((n) => n.trim()).filter((n) => n.length >= 10);
+      if (usableNeedles.length === 0) return false;
+
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (needleList: string[]) => {
+          const normalize = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase();
+          const normalizedNeedles = needleList.map((n) => normalize(n)).filter(Boolean);
+          if (normalizedNeedles.length === 0) return false;
+
+          const wrappers = Array.from(document.querySelectorAll('div.group')).filter((el) =>
+            el.querySelector('[role="group"][aria-label="Message actions"]')
+          );
+
+          const requiredMatches = normalizedNeedles.length >= 2 ? 2 : 1;
+
+          return wrappers.some((wrapper) => {
+            const wrapperText = ((wrapper as HTMLElement).innerText || wrapper.textContent || '').toString();
+            const normalizedWrapperText = normalize(wrapperText);
+
+            let matchCount = 0;
+            for (const needle of normalizedNeedles) {
+              if (normalizedWrapperText.includes(needle)) {
+                matchCount += 1;
+                if (matchCount >= requiredMatches) return true;
+              }
+            }
+
+            return false;
+          });
+        },
+        args: [usableNeedles],
+      });
+
+      return Boolean(results[0]?.result);
+    };
+
+    const getLevelStateAndClickPoint = async (
+      anchorText: string | null,
+      expectedSiblingCount: number,
+      direction: 'Previous' | 'Next',
+      siblingNeedles: string[]
+    ) => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (
+          anchorText: string | null,
+          expectedSiblingCount: number,
+          direction: string,
+          siblingNeedles: string[]
+        ) => {
+          const indicatorRegex = /^\s*(\d+)\s*\/\s*(\d+)\s*$/;
+
+          const canonicalize = (text: string) =>
+            text
+              .normalize('NFKC')
+              .toLowerCase()
+              .replace(/[\u2018\u2019]/g, "'")
+              .replace(/[\u201c\u201d]/g, '"')
+              .replace(/\s+/g, ' ')
+              .trim();
+
+          const makeNeedles = (text: string) => {
+            const normalized = canonicalize(text);
+            const midStart = Math.max(0, Math.floor(normalized.length / 2) - 40);
+            return {
+              head: normalized.slice(0, 80),
+              mid: normalized.slice(midStart, midStart + 80),
+            };
+          };
+
+          const actionGroups = Array.from(document.querySelectorAll('[role="group"][aria-label="Message actions"]'));
+
+          const anchorNeedles = anchorText ? makeNeedles(anchorText) : null;
+          const canonicalSiblingNeedles = (siblingNeedles || []).map((t) => canonicalize(t)).filter(Boolean);
+
+          const scoreText = (text: string) => {
+            const wrapperText = canonicalize(text);
+            if (!wrapperText) return 0;
+
+            let score = 0;
+            if (anchorNeedles?.head && wrapperText.includes(anchorNeedles.head)) score += 5;
+            if (anchorNeedles?.mid && anchorNeedles.mid.length > 20 && wrapperText.includes(anchorNeedles.mid))
+              score += 3;
+            for (const needle of canonicalSiblingNeedles) {
+              if (needle.length < 5) continue;
+              if (wrapperText.includes(needle)) score += 1;
+            }
+            return score;
+          };
+
+          const candidates: Array<{
+            group: Element;
+            wrapper: Element | null;
+            score: number;
+            currentIndex: number;
+            total: number;
+            hoverPoint: { x: number; y: number };
+            clickPoint: { x: number; y: number } | null;
+            indicatorText: string;
+          }> = [];
+
+          for (let i = 0; i < actionGroups.length; i++) {
+            const group = actionGroups[i] as Element;
+            const span = Array.from(group.querySelectorAll('span')).find((s) =>
+              indicatorRegex.test((s.textContent || '').trim())
+            );
+            if (!span) continue;
+
+            const match = (span.textContent || '').trim().match(indicatorRegex);
+            if (!match) continue;
+
+            const current = parseInt(match[1], 10);
+            const total = parseInt(match[2], 10);
+            if (!Number.isFinite(current) || !Number.isFinite(total)) continue;
+
+            const matchesExpectedTotal = total === expectedSiblingCount;
+
+            const prevButton = group.querySelector('button[aria-label="Previous"]') as HTMLButtonElement | null;
+            const nextButton = group.querySelector('button[aria-label="Next"]') as HTMLButtonElement | null;
+
+            const wrapper = group.closest('div.group');
+            const wrapperText = wrapper
+              ? ((wrapper as HTMLElement).innerText || wrapper.textContent || '')
+              : (group.textContent || '');
+            const score = scoreText(wrapperText) + (matchesExpectedTotal ? 2 : 0);
+
+            const hoverTarget =
+              (wrapper && wrapper.querySelector('[data-testid$="message"], [data-testid*="message"]')) ||
+              wrapper ||
+              group;
+            const hoverRect = (hoverTarget as Element).getBoundingClientRect();
+            const hoverPoint = {
+              x: hoverRect.left + hoverRect.width / 2,
+              y: hoverRect.top + Math.min(40, hoverRect.height / 2),
+            };
+
+            let clickPoint: { x: number; y: number } | null = null;
+            const targetButton = direction === 'Previous' ? prevButton : nextButton;
+            if (targetButton) {
+              const buttonRect = targetButton.getBoundingClientRect();
+              clickPoint = { x: buttonRect.left + buttonRect.width / 2, y: buttonRect.top + buttonRect.height / 2 };
+            }
+
+            candidates.push({
+              group,
+              wrapper,
+              score,
+              currentIndex: current - 1,
+              total,
+              hoverPoint,
+              clickPoint,
+              indicatorText: `${current} / ${total}`,
+            });
           }
-        
-          if (maxDepth <= 0) {
-            return null; // Base case: Reached maximum depth, return null.
+
+          if (candidates.length === 0) {
+            if (anchorText || canonicalSiblingNeedles.length > 0) {
+              return { error: 'No matching message wrapper found for anchor/sibling needles' };
+            }
+            return { error: 'No branch control found for expected sibling count' };
           }
-        
-          // Find all buttons inside the current element
-          const buttons = element.querySelectorAll('button');
-        
-          if (buttons.length > 0) {
-            // If buttons are found, convert NodeList to an array and return it
-            return Array.from(buttons);
+
+          candidates.sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            const ay = a.wrapper ? a.wrapper.getBoundingClientRect().top : a.group.getBoundingClientRect().top;
+            const by = b.wrapper ? b.wrapper.getBoundingClientRect().top : b.group.getBoundingClientRect().top;
+            return by - ay;
+          });
+
+          const best = candidates[0];
+          const wrapperToScroll = best.wrapper || best.group;
+          wrapperToScroll.scrollIntoView({ block: 'center', inline: 'nearest' });
+
+          if (!best.clickPoint) {
+            return { error: 'Branch buttons not found under candidate wrapper', hoverPoint: best.hoverPoint, debug: { score: best.score } };
           }
-        
-          // Recursive step: Move up to the parent element
-          return findButtons(element.parentElement, maxDepth - 1);
+
+          return {
+            error: null,
+            currentIndex: best.currentIndex,
+            total: best.total,
+            hoverPoint: best.hoverPoint,
+            clickPoint: best.clickPoint,
+            debug: { score: best.score, indicatorText: best.indicatorText },
+          };
+        },
+        args: [anchorText, expectedSiblingCount, direction, siblingNeedles],
+      });
+
+      const result = results[0]?.result as any;
+      if (!result || typeof result !== 'object') {
+        return { error: 'DOM probe returned no result' };
+      }
+      return result;
+    };
+
+    const clickAt = async (point: { x: number; y: number }) => {
+      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: point.x,
+        y: point.y,
+      });
+      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x: point.x,
+        y: point.y,
+        button: 'left',
+        clickCount: 1,
+      });
+      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: point.x,
+        y: point.y,
+        button: 'left',
+        clickCount: 1,
+      });
+    };
+
+    const hoverAt = async (point: { x: number; y: number }) => {
+      await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: point.x,
+        y: point.y,
+      });
+    };
+
+    // Attach debugger to send trusted input events
+    debugClaudeNavigation('[selectBranchClaude] Attaching debugger to tab', tabId);
+    await safeDetach('pre-attach');
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await chrome.debugger.attach(debuggee, '1.3');
+        debugClaudeNavigation('[selectBranchClaude] Debugger attached successfully');
+        break;
+      } catch (error: any) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes('Another debugger is already attached')) {
+          throw error;
+        }
+        if (attempt === 2) {
+          throw error;
+        }
+        await sleep(200);
+      }
+    }
+
+    try {
+      const targetLevels = navigationTarget.levels as Array<{
+        siblingCount: number;
+        targetIndex: number;
+        anchorText: string | null;
+        siblingNeedles: string[];
+      }>;
+
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const input = document.querySelector('[data-testid="chat-input-grid-container"]');
+          let el: Element | null = input ? input.parentElement : null;
+          for (let i = 0; i < 25 && el; i++) {
+            const style = window.getComputedStyle(el);
+            if (['auto', 'scroll'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 100) {
+              (el as HTMLElement).scrollTop = 0;
+              return;
+            }
+            el = el.parentElement;
+          }
+        },
+      });
+      await sleep(200);
+
+      const viewportResult = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const input = document.querySelector('[data-testid="chat-input-grid-container"]');
+          let el: Element | null = input ? input.parentElement : null;
+          for (let i = 0; i < 25 && el; i++) {
+            const style = window.getComputedStyle(el);
+            if (['auto', 'scroll'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 100) {
+              return { height: (el as HTMLElement).clientHeight || window.innerHeight };
+            }
+            el = el.parentElement;
+          }
+
+          return { height: window.innerHeight };
+        },
+      });
+      const viewportHeight = viewportResult[0]?.result?.height ?? 800;
+      const scrollDy = Math.floor(viewportHeight * 0.8);
+
+      const targetNeedles = getTargetNeedles();
+      if (await isTargetVisible(targetNeedles)) {
+        debugClaudeNavigation('[selectBranchClaude] Target already visible; skipping branch navigation');
+        return;
+      }
+
+      const getAvailableBranchTotals = async () => {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const indicatorRegex = /^\s*(\d+)\s*\/\s*(\d+)\s*$/;
+            const actionGroups = Array.from(
+              document.querySelectorAll('[role="group"][aria-label="Message actions"]')
+            );
+            const totals: number[] = [];
+
+            for (const group of actionGroups) {
+              const span = Array.from(group.querySelectorAll('span')).find((s) =>
+                indicatorRegex.test((s.textContent || '').trim())
+              );
+              const match = span ? (span.textContent || '').trim().match(indicatorRegex) : null;
+              if (!match) continue;
+              const total = parseInt(match[2], 10);
+              if (Number.isFinite(total)) totals.push(total);
+            }
+
+            return Array.from(new Set(totals)).sort((a, b) => a - b);
+          },
+        });
+
+        return (results[0]?.result as number[]) || [];
+      };
+
+      const pendingLevels = new Set<number>(targetLevels.map((_l, index) => index));
+      const maxIterations = 120;
+      let scrollDirection = -1;
+      let lastScrollTop: number | null = null;
+      let stuckCount = 0;
+      const lastErrors: Record<number, string> = {};
+
+      for (let iteration = 0; iteration < maxIterations; iteration++) {
+        if (await isTargetVisible(targetNeedles)) {
+          debugClaudeNavigation('[selectBranchClaude] Target became visible; stopping');
+          return;
         }
 
-        const waitForDomChange = (): Promise<void> => {
-          return new Promise((resolve) => {
-            const observer = new MutationObserver((mutations) => {
-              if (mutations.some(m => 
-                  m.type === 'childList' && (m.addedNodes.length > 0 || m.removedNodes.length > 0) ||
-                  (m.type === 'attributes' && ['style', 'class'].includes(m.attributeName || '')))) {
-                observer.disconnect();
-                resolve();
-              }
-            });
+        let acted = false;
 
-            const mainContent = document.querySelector('main') || document.body;
-            observer.observe(mainContent, {
-              childList: true,
-              subtree: true,
-              attributes: true,
-              attributeFilter: ['style', 'class', 'aria-hidden']
-            });
-          });
-        };
+        for (let levelIndex = 0; levelIndex < targetLevels.length; levelIndex++) {
+          if (!pendingLevels.has(levelIndex)) continue;
 
+          const level = targetLevels[levelIndex];
 
-        // Process all steps as fast as possible
-        const processSteps = async () => {
-          try {
-            for (const step of stepsToTake) {
-              if (!step.nodeId) {
-                throw new Error('Step missing nodeId');
-                
-              }
+          let located = await getLevelStateAndClickPoint(
+            level.anchorText,
+            level.siblingCount,
+            'Next',
+            level.siblingNeedles || []
+          );
 
-              // Find the target element
-              const normalizedTargetText = step.nodeText.trim().replace(/\s+/g, ' ');
-              const containers = document.querySelectorAll('.grid-cols-1');
-              
-              let element = null;
-              for (const container of containers) {
-                const containerText = container.textContent?.trim().replace(/\s+/g, ' ');
-                if (containerText === normalizedTargetText) {
-                  element = container; // Return the element that matches
-                }
-              }
-
-              
-              //0 is edit, 1 is previous, 2 is next
-              let buttonIndex = step.stepsLeft > 0 ? 1 : 2;
-
-              const buttons = findButtons(element);
-
-              if (!buttons) {
-                throw new Error(`Button with required aria-label not found for nodeId: ${step.nodeId}`);
-              }
-
-              const button = buttons[buttonIndex];
-
-              // Click the button and wait for DOM changes
-              button.click();
-              await waitForDomChange();
-            }
-          } catch (error) {
-            console.error('Error processing steps:', error);
-            throw error;
+          if (located?.error && located?.hoverPoint) {
+            // Some Claude UIs only render branch controls after hover/focus
+            await hoverAt(located.hoverPoint);
+            await sleep(120);
+            located = await getLevelStateAndClickPoint(
+              level.anchorText,
+              level.siblingCount,
+              'Next',
+              level.siblingNeedles || []
+            );
           }
-        };
 
-        return processSteps();
-      },
-      args: [stepsToTake]
-    });
+          if (!located || located.error) {
+            lastErrors[levelIndex] = located?.error || 'Unknown error locating branch control';
+            continue;
+          }
+
+          const currentIndex = (located as { currentIndex: number }).currentIndex;
+
+          if (currentIndex === level.targetIndex) {
+            debugClaudeNavigation(
+              `[selectBranchClaude] Level ${levelIndex} satisfied (${currentIndex + 1}/${level.siblingCount})`
+            );
+            pendingLevels.delete(levelIndex);
+            continue;
+          }
+
+          const direction = currentIndex < level.targetIndex ? 'Next' : 'Previous';
+          let state = await getLevelStateAndClickPoint(
+            level.anchorText,
+            level.siblingCount,
+            direction,
+            level.siblingNeedles || []
+          );
+
+          if (state?.error && state?.hoverPoint) {
+            await hoverAt(state.hoverPoint);
+            await sleep(120);
+            state = await getLevelStateAndClickPoint(
+              level.anchorText,
+              level.siblingCount,
+              direction,
+              level.siblingNeedles || []
+            );
+          }
+
+          if (!state || state.error || !state.clickPoint) {
+            lastErrors[levelIndex] = state?.error || 'Unknown error acquiring click point';
+            continue;
+          }
+
+          if (state.hoverPoint) {
+            await hoverAt(state.hoverPoint);
+            await sleep(100);
+          }
+
+          debugClaudeNavigation(
+            `[selectBranchClaude] Iter ${iteration + 1}/${maxIterations} ` +
+              `Level ${levelIndex} ${direction} ` +
+              `(${currentIndex + 1}/${level.siblingCount} -> ${level.targetIndex + 1}/${level.siblingCount})`
+          );
+
+          await clickAt(state.clickPoint);
+          await sleep(200);
+          acted = true;
+          break;
+        }
+
+        if (await isTargetVisible(targetNeedles)) {
+          debugClaudeNavigation('[selectBranchClaude] Target became visible; stopping');
+          return;
+        }
+
+        if (pendingLevels.size === 0) {
+          debugClaudeNavigation('[selectBranchClaude] All levels satisfied; stopping');
+          return;
+        }
+
+        if (!acted) {
+          if (iteration % 10 === 0) {
+            const availableTotals = await getAvailableBranchTotals();
+            debugClaudeNavigation(
+              `[selectBranchClaude] No actionable controls (available totals: ${JSON.stringify(availableTotals)}); scrolling`
+            );
+          }
+
+          // Scan the chat scroller systematically to coax virtualization into rendering different message wrappers
+          const scrollResult = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: (dy: number) => {
+              const input = document.querySelector('[data-testid="chat-input-grid-container"]');
+              let el: Element | null = input ? input.parentElement : null;
+              let scroller: HTMLElement | null = null;
+
+              for (let i = 0; i < 25 && el; i++) {
+                const style = window.getComputedStyle(el);
+                if (['auto', 'scroll'].includes(style.overflowY) && el.scrollHeight > el.clientHeight + 100) {
+                  scroller = el as HTMLElement;
+                  break;
+                }
+                el = el.parentElement;
+              }
+
+              if (!scroller) {
+                return { scrollTop: null, maxScrollTop: null };
+              }
+
+              const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+              const nextScrollTop = Math.max(0, Math.min(maxScrollTop, scroller.scrollTop + dy));
+              scroller.scrollTop = nextScrollTop;
+              return { scrollTop: scroller.scrollTop, maxScrollTop };
+            },
+            args: [scrollDy * scrollDirection],
+          });
+
+          const scrollTop = scrollResult[0]?.result?.scrollTop ?? null;
+          const maxScrollTop = scrollResult[0]?.result?.maxScrollTop ?? null;
+
+          if (scrollTop !== null) {
+            if (lastScrollTop !== null && Math.abs(scrollTop - lastScrollTop) < 2) {
+              stuckCount += 1;
+            } else {
+              stuckCount = 0;
+            }
+            lastScrollTop = scrollTop;
+
+            if (maxScrollTop !== null) {
+              if (scrollTop <= 1 || scrollTop >= maxScrollTop - 1) {
+                scrollDirection = scrollDirection * -1;
+              }
+            }
+          }
+
+          if (stuckCount > 8) {
+      debugClaudeNavigation('[selectBranchClaude] Scroller appears stuck; flipping direction');
+            stuckCount = 0;
+            scrollDirection = scrollDirection * -1;
+          }
+
+          await sleep(220);
+        }
+      }
+
+      const availableTotals = await getAvailableBranchTotals();
+      const missing = Array.from(pendingLevels).map((levelIndex) => ({
+        levelIndex,
+        siblingCount: targetLevels[levelIndex].siblingCount,
+        targetIndex: targetLevels[levelIndex].targetIndex,
+        lastError: lastErrors[levelIndex] || null,
+      }));
+
+    const suffix =
+    missing.length === 0
+      ? 'All levels satisfied but target never became visible'
+      : `Pending levels: ${JSON.stringify(missing)}`;
+
+      throw new Error(
+        `Exceeded max iterations while navigating Claude branches. ` +
+          `Available totals: ${JSON.stringify(availableTotals)}. ` +
+      suffix
+      );
+    } finally {
+      await safeDetach('finally');
+      await sleep(50);
+      await safeDetach('finally-retry');
+    }
   } catch (error) {
+    try {
+      const message = error instanceof Error ? error.message : String(error);
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const currentTab = tabs[0];
+      if (currentTab?.id) {
+        await chrome.scripting.executeScript({
+          target: { tabId: currentTab.id },
+          func: (msg: string) => console.error('[ChatTree][selectBranchClaude]', msg),
+          args: [message],
+        });
+      }
+    } catch {
+      // Ignore console emit errors
+    }
     console.error('selectBranchClaude failed:', error);
     throw error;
   }
@@ -1037,7 +1542,7 @@ async function selectBranch(stepsToTake: any[]) {
         const waitForDomChange = (): Promise<void> => {
           return new Promise((resolve) => {
             const observer = new MutationObserver((mutations) => {
-              if (mutations.some(m => 
+              if (mutations.some(m =>
                   m.type === 'childList' && (m.addedNodes.length > 0 || m.removedNodes.length > 0) ||
                   (m.type === 'attributes' && ['style', 'class'].includes(m.attributeName || '')))) {
                 observer.disconnect();
@@ -1070,7 +1575,7 @@ async function selectBranch(stepsToTake: any[]) {
               }
 
               triggerNativeEvents(element);
-              
+
               const buttonDiv = element.parentElement?.parentElement;
               if (!buttonDiv) {
                 throw new Error(`Button container not found for nodeId: ${step.nodeId}`);
@@ -1082,7 +1587,7 @@ async function selectBranch(stepsToTake: any[]) {
                   const buttons = Array.from(container?.querySelectorAll('button') || []);
                   return buttons[step.stepsLeft > 0 ? 0 : 1]; // 0 for left, 1 for right
                 }
-                
+
                 // User message: buttons are [copy, edit, left, right]
                 const buttons = Array.from(buttonDiv.querySelectorAll("button"));
                 return buttons[step.stepsLeft > 0 ? 2 : 3]; // 2 for left, 3 for right
@@ -1102,7 +1607,7 @@ async function selectBranch(stepsToTake: any[]) {
 
               while (!button && attempts < maxAttempts) {
                 button = findNavigationButton(buttonDiv, step);
-                
+
                 if (!button) {
                   processElementRecursively(element);
                   attempts++;
@@ -1133,29 +1638,39 @@ async function selectBranch(stepsToTake: any[]) {
   }
 }
 
-async function goToTarget(targetId: string) {
+async function goToTarget(targetId: string): Promise<boolean> {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const currentTab = tabs[0];
+  if (!currentTab?.id) {
+    console.error('goToTarget: No active tab found');
+    return false;
+  }
 
-  await chrome.scripting.executeScript({
-    target: { tabId: currentTab.id ?? 0 },
-    func: (targetId) => {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: currentTab.id },
+    func: (targetId: string) => {
       const element = document.querySelector(`[data-message-id="${targetId}"]`);
-      if (element) {
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+      if (!element) return false;
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return true;
     },
-    args: [targetId]
-  })
+    args: [targetId],
+  });
+
+  return Boolean(results[0]?.result);
 }
 
-async function goToTargetClaude(targetText: string) {
+async function goToTargetClaude(targetText: string): Promise<boolean> {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const currentTab = tabs[0];
+  if (!currentTab?.id) {
+    console.error('goToTargetClaude: No active tab found');
+    return false;
+  }
 
-  await chrome.scripting.executeScript({
-    target: { tabId: currentTab.id ?? 0 },
-    func: (targetText) => {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: currentTab.id },
+    func: (targetText: string) => {
       function htmlTextEqualsIgnoringArtifacts(html: string, text: string): boolean {
         const decodeEntities = (str: string) =>
           str
@@ -1179,7 +1694,7 @@ async function goToTargetClaude(targetText: string) {
             .replace(/^•\s*/gm, '')       // remove bullets
             .replace(/\s+/g, ' ')         // collapse all whitespace
             .trim();
-        
+
 
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
@@ -1187,19 +1702,19 @@ async function goToTargetClaude(targetText: string) {
         function getVisibleTextWithSpacing(node: Node, listStack: number[] = []): string {
           let result = '';
 
-        
+
           for (const child of node.childNodes) {
             if (child.nodeType === Node.TEXT_NODE) {
               result += child.textContent || '';
             } else if (child.nodeType === Node.ELEMENT_NODE) {
               const el = child as HTMLElement;
               const tag = el.tagName.toLowerCase();
-        
+
               if (tag === 'br') {
                 result += '\n';
                 continue;
               }
-        
+
               if (tag === 'ol') {
                 const startAttr = parseInt(el.getAttribute('start') || '1', 10);
                 listStack.push(startAttr);
@@ -1207,14 +1722,14 @@ async function goToTargetClaude(targetText: string) {
                 listStack.pop();
                 continue;
               }
-        
+
               if (tag === 'ul') {
                 listStack.push(-1); // sentinel for unordered
                 result += '\n' + getVisibleTextWithSpacing(el, listStack) + '\n';
                 listStack.pop();
                 continue;
               }
-        
+
               if (tag === 'li') {
                 let bullet = '• ';
                 if (listStack[listStack.length - 1] !== -1) {
@@ -1223,17 +1738,17 @@ async function goToTargetClaude(targetText: string) {
                 result += bullet + getVisibleTextWithSpacing(el, listStack).trim() + '\n';
                 continue;
               }
-        
+
               result += getVisibleTextWithSpacing(el, listStack);
               if (['p', 'div', 'section', 'article', 'li'].includes(tag)) {
                 result += '\n';
               }
             }
           }
-        
+
           return result;
         }
-        
+
         const htmlText = getVisibleTextWithSpacing(doc.body);
 
         const normalizedHTML = normalize(htmlText);
@@ -1244,22 +1759,26 @@ async function goToTargetClaude(targetText: string) {
       }
 
       const containers = document.querySelectorAll('.grid-cols-1');
-      
+
       for (const container of containers) {
         const containerHTML = container.innerHTML;
         if (htmlTextEqualsIgnoringArtifacts(containerHTML, targetText)) {
           container.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          break;
+          return true;
         }
       }
+
+      return false;
     },
-    args: [targetText]
-  })
+    args: [targetText],
+  });
+
+  return Boolean(results[0]?.result);
 }
 
 async function respondToMessageClaude(childrenIds: string[], message: string) {
   try {
-    
+
     if (!Array.isArray(childrenIds)) {
       throw new Error('childrenIds must be an array');
     }
@@ -1281,43 +1800,43 @@ async function respondToMessageClaude(childrenIds: string[], message: string) {
       target: { tabId: currentTab.id },
       func: (childrenIds, message) => {
         // Helper function to wait for DOM changes with specific state check
-        
+
         function findButtons(element: Element | null, maxDepth = 5) {
           if (!element) {
             console.log('No element provided to findButtons');
             return null;
           }
-        
+
           if (maxDepth <= 0) {
             console.log('Reached maximum depth in findButtons');
             return null;
           }
-        
+
           const buttons = element.querySelectorAll('button');
-        
-        
+
+
           if (buttons.length > 0) {
             return Array.from(buttons);
           }
-        
+
           return findButtons(element.parentElement, maxDepth - 1);
         }
 
         const performResponse = async () => {
-         
-          
+
+
           // Find the first visible message element
           let element = null;
           for (const messageId of childrenIds) {
-           
+
             const normalizedTargetText = messageId.trim().replace(/\s+/g, ' ');
             const containers = document.querySelectorAll('.grid-cols-1');
-            
-            
+
+
             for (const container of containers) {
               const containerText = container.textContent?.trim().replace(/\s+/g, ' ');
               if (containerText === normalizedTargetText) {
-                
+
                 element = container;
                 break;
               }
@@ -1350,7 +1869,7 @@ async function respondToMessageClaude(childrenIds: string[], message: string) {
           let textArea: HTMLTextAreaElement | null = null;
           let attempts = 0;
           const maxAttempts = 10;
-          
+
           while (!textArea && attempts < maxAttempts) {
             // Look for textarea with the specific class pattern
             textArea = document.querySelector('textarea.bg-bg-000.border.border-border-300') as HTMLTextAreaElement;
@@ -1372,11 +1891,11 @@ async function respondToMessageClaude(childrenIds: string[], message: string) {
           let buttonContainer: HTMLElement | null = textArea;
           let iterations = 0;
           const maxIterations = 5;
-          
+
           while (iterations < maxIterations) {
             buttonContainer = buttonContainer.parentElement;
             if (!buttonContainer) break;
-            
+
             const buttons = buttonContainer.querySelectorAll('button');
             if (buttons.length > 0) {
               console.log('Found button container');
@@ -1415,7 +1934,7 @@ async function respondToMessageClaude(childrenIds: string[], message: string) {
 
 async function editMessageClaude(messageText: string, newMessage: string) {
   try {
-    
+
     if (typeof messageText !== 'string') {
       throw new Error('messageText must be a string');
     }
@@ -1441,28 +1960,28 @@ async function editMessageClaude(messageText: string, newMessage: string) {
             console.log('No element provided to findButtons');
             return null;
           }
-        
+
           if (maxDepth <= 0) {
             console.log('Reached maximum depth in findButtons');
             return null;
           }
-        
+
           const buttons = element.querySelectorAll('button');
-         
-        
+
+
           if (buttons.length > 0) {
             return Array.from(buttons);
           }
-        
+
           return findButtons(element.parentElement, maxDepth - 1);
         }
 
         const performEdit = async () => {
-          
+
           // Find the message element
           const normalizedTargetText = messageText.trim().replace(/\s+/g, ' ');
           const containers = document.querySelectorAll('.grid-cols-1');
-          
+
           let element = null;
           for (const container of containers) {
             const containerText = container.textContent?.trim().replace(/\s+/g, ' ');
@@ -1497,7 +2016,7 @@ async function editMessageClaude(messageText: string, newMessage: string) {
           let textArea: HTMLTextAreaElement | null = null;
           let attempts = 0;
           const maxAttempts = 10;
-          
+
           while (!textArea && attempts < maxAttempts) {
             // Look for textarea with the specific class pattern
             textArea = document.querySelector('textarea.bg-bg-000.border.border-border-300') as HTMLTextAreaElement;
@@ -1519,11 +2038,11 @@ async function editMessageClaude(messageText: string, newMessage: string) {
           let buttonContainer: HTMLElement | null = textArea;
           let iterations = 0;
           const maxIterations = 5;
-          
+
           while (iterations < maxIterations) {
             buttonContainer = buttonContainer.parentElement;
             if (!buttonContainer) break;
-            
+
             const buttons = buttonContainer.querySelectorAll('button');
             if (buttons.length > 0) {
               break;
@@ -1575,7 +2094,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, _info, tab) => {
         path: 'index.html',
         enabled: true
       });
-      
+
       // Trigger native events when a ChatGPT or Claude page is loaded or updated
       // Wait a bit for the page to fully load
       setTimeout(() => {
@@ -1596,14 +2115,14 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   const tab = await chrome.tabs.get(activeInfo.tabId);
   if (!tab.url) return;
   const url = new URL(tab.url);
-  
+
   if (url.origin === CHATGPT_ORIGIN || url.origin === CLAUDE_ORIGIN) {
     await chrome.sidePanel.setOptions({
       tabId: activeInfo.tabId,
       path: 'index.html',
       enabled: true
     });
-    
+
     // Trigger native events when switching to a ChatGPT tab
     // Wait a bit for the page to be fully active
     setTimeout(() => {
@@ -1620,4 +2139,3 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((error) => console.error(error));
-

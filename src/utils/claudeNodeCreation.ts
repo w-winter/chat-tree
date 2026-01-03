@@ -1,18 +1,57 @@
-import { ClaudeNode, ClaudeEdge, ClaudeConversation } from '../types/interfaces';
-import { nodeWidth, nodeHeight } from "../constants/constants";
+import { ClaudeChatMessage, ClaudeConversation, ClaudeEdge, ClaudeNode } from '../types/interfaces';
+import { nodeHeight, nodeWidth } from '../constants/constants';
 import dagre from '@dagrejs/dagre';
 
 const dagreGraph = new dagre.graphlib.Graph().setGraph({}).setDefaultEdgeLabel(() => ({}));
+
+const EMPTY_PARENT_UUID = '00000000-0000-4000-8000-000000000000';
+
+const parseClaudeTimestampSeconds = (createdAt: unknown): number => {
+  const createdAtMs = Date.parse(String(createdAt));
+  if (!Number.isFinite(createdAtMs)) {
+    return Math.floor(Date.now() / 1000);
+  }
+  return Math.floor(createdAtMs / 1000);
+};
+
+const getClaudeParentId = (message: ClaudeChatMessage): string => {
+  if (!message.parent_message_uuid || message.parent_message_uuid === EMPTY_PARENT_UUID) {
+    return 'root';
+  }
+  return message.parent_message_uuid;
+};
+
+// Extract text from all content blocks in a Claude message
+const extractMessageText = (message: ClaudeChatMessage): string => {
+  if (message.content && message.content.length > 0) {
+    const texts = message.content
+      .filter((block) => block.text && block.text.trim())
+      .map((block) => block.text.trim());
+
+    if (texts.length > 0) {
+      return texts.join('\n\n');
+    }
+  }
+
+  if (message.text && message.text.trim()) {
+    return message.text.trim();
+  }
+
+  return 'No content available';
+};
+
+// Create a short label/preview from full text
+const createLabel = (fullText: string, maxLength: number = 100): string => {
+  if (fullText.length <= maxLength) return fullText;
+  return fullText.substring(0, maxLength) + '...';
+};
 
 export const createClaudeNodesInOrder = async (
   conversationData: ClaudeConversation,
   checkNodes: (nodeTexts: string[]) => Promise<boolean[]>
 ) => {
-  const messages = conversationData.chat_messages;
-  const newNodes = new Array<ClaudeNode>();
-  const newEdges = new Array<ClaudeEdge>();
+  const nodeById = new Map<string, ClaudeNode>();
 
-  // Create root node
   const rootNode: ClaudeNode = {
     id: 'root',
     type: 'custom',
@@ -24,83 +63,73 @@ export const createClaudeNodesInOrder = async (
       label: 'Start of your conversation',
       text: 'Start of your conversation',
       role: 'system',
-      timestamp: new Date().getTime(),
+      timestamp: Math.floor(Date.now() / 1000),
       id: 'root',
       hidden: true,
-      contentType: 'text'
-    }
+      contentType: 'text',
+    },
   };
-  newNodes.push(rootNode);
+  nodeById.set(rootNode.id, rootNode);
 
-  // Create nodes for each message
-  messages.forEach((message, _index: number) => {
-    message.parent_message_uuid = message.parent_message_uuid === '00000000-0000-4000-8000-000000000000' ? 'root' : message.parent_message_uuid;
+  for (const message of conversationData.chat_messages) {
+    const parentId = getClaudeParentId(message);
+    const fullText = extractMessageText(message);
+
     const node: ClaudeNode = {
       id: message.uuid,
       type: 'custom',
-      parent: message.parent_message_uuid, // Connect to root if no parent
+      parent: parentId,
       children: [],
-      position: { x: 0, y: 0 }, // Will be set by dagre layout
-      message: message,
+      position: { x: 0, y: 0 },
+      message,
       data: {
-        label: message.content[0]?.text || 'No content available',
-        text: message.content[0]?.text || 'No content available',
+        label: createLabel(fullText),
+        text: fullText,
         role: message.sender,
-        timestamp: new Date(message.created_at).getTime(),
+        timestamp: parseClaudeTimestampSeconds(message.created_at),
         id: message.uuid,
         hidden: true,
-        contentType: message.content[0]?.type || 'text'
-      }
+        contentType: message.content?.[0]?.type || 'text',
+      },
     };
 
-    // Add child relationships
-    if (message.parent_message_uuid) {
-      const parentNode = newNodes.find(n => n.id === message.parent_message_uuid);
-      if (parentNode) {
-        parentNode.children.push(message.uuid);
-        
-      }
-    } else {
-      // If no parent, connect to root node
-      rootNode.children.push(message.uuid);
+    nodeById.set(node.id, node);
+  }
 
-    }
+  for (const node of nodeById.values()) {
+    if (node.id === 'root') continue;
 
-    newNodes.push(node);
-  });
+    const parentId = node.parent || 'root';
+    const parentNode = nodeById.get(parentId) || rootNode;
 
+    node.parent = parentNode.id;
+    parentNode.children.push(node.id);
+  }
 
+  const nodes = Array.from(nodeById.values());
+  const edges = nodes
+    .filter((node) => node.parent)
+    .map((node) => ({
+      id: `${node.parent}-${node.id}`,
+      source: node.parent as string,
+      target: node.id,
+      type: 'smoothstep',
+      animated: true,
+      style: { stroke: '#000000', strokeWidth: 2 },
+    })) as ClaudeEdge[];
 
-  // Create edges between parent and child nodes
-  newNodes.forEach(node => {
-    if (node.parent) {
-    
-      newEdges.push({
-        id: `${node.parent}-${node.id}`,
-        source: node.parent,
-        target: node.id,
-        type: 'smoothstep',
-        animated: true,
-        style: { stroke: '#000000', strokeWidth: 2 }
-      });
-    }
-  });
-
-  // Update visibility state of nodes
-  const nodesToCheck = newNodes.filter(node => node.id !== 'root'); // Don't check root node
-  const existingNodes = await checkNodes(nodesToCheck.map(node => node.data.text));
+  const nodesToCheck = nodes.filter((node) => node.id !== 'root');
+  const existingNodes = await checkNodes(nodesToCheck.map((node) => node.data.text));
   existingNodes.forEach((hidden: boolean, index: number) => {
     if (nodesToCheck[index]) {
       nodesToCheck[index]!.data!.hidden = hidden;
     }
   });
 
-  return layoutNodes(newNodes, newEdges);
+  return layoutNodes(nodes, edges);
 };
 
 const layoutNodes = (nodes: ClaudeNode[], edges: ClaudeEdge[]) => {
-  
-  // Initialize dagre graph with node dimensions
   nodes.forEach((node) => {
     dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
   });
@@ -109,10 +138,8 @@ const layoutNodes = (nodes: ClaudeNode[], edges: ClaudeEdge[]) => {
     dagreGraph.setEdge(edge.source, edge.target);
   });
 
-  // Apply dagre layout algorithm
   dagre.layout(dagreGraph);
 
-  // Transform nodes with calculated positions
   const nodesWithPositions = nodes.map((node) => {
     const nodeWithPosition = dagreGraph.node(node.id);
     return {

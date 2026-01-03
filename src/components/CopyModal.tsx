@@ -1,12 +1,12 @@
-import { OpenAINode } from '../types/interfaces';
 import { useState } from 'react';
+import { ClaudeNode, ConversationProvider, OpenAINode } from '../types/interfaces';
 
 interface CopyModalProps {
   onClose: () => void;
   onCopy: (selectedNodeIds: string[]) => void;
-  nodes: OpenAINode[];
+  nodes: OpenAINode[] | ClaudeNode[];
   onNodeClick?: (nodeId: string) => void;
-  provider?: 'openai' | 'claude';
+  provider?: ConversationProvider;
 }
 
 export const CopyModal = ({ onClose, onCopy, nodes, onNodeClick, provider = 'openai' }: CopyModalProps) => {
@@ -39,13 +39,13 @@ export const CopyModal = ({ onClose, onCopy, nodes, onNodeClick, provider = 'ope
     setTimeout(() => setShowCopied(false), 2000);
   };
 
-  const handleContextMenu = async (e: React.MouseEvent, node: OpenAINode) => {
+  const handleContextMenu = async (e: React.MouseEvent, node: OpenAINode | ClaudeNode) => {
     e.preventDefault();
     if (onNodeClick) {
       try {
         await chrome.runtime.sendMessage({ 
           action: provider === 'openai' ? "goToTarget" : "goToTargetClaude", 
-          targetId: provider === 'openai' ? node.id : node.data?.label
+          targetId: provider === 'openai' ? node.id : (node as ClaudeNode).data.text
         });
       } catch (error) {
         console.error('Error navigating to target:', error);
@@ -92,7 +92,7 @@ export const CopyModal = ({ onClose, onCopy, nodes, onNodeClick, provider = 'ope
             >
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  {node.data?.role === 'user' ? 'You' : 'Assistant'}
+                  {(node.data?.role === 'user' || node.data?.role === 'human') ? 'You' : 'Assistant'}
                 </span>
                 <span className="text-xs text-gray-500 dark:text-gray-400">
                   {node.data?.timestamp ? new Date(node.data.timestamp * 1000).toLocaleString() : ''}
