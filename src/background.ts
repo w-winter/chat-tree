@@ -269,7 +269,10 @@ chrome.runtime.onMessage.addListener(
             throw new Error('childrenTexts must be an array');
           }
 
-          await respondToMessageClaude(childrenTexts, request.message);
+          // Serialize via enqueueClaudeNavigation to prevent chrome.debugger attach collisions
+          await enqueueClaudeNavigation(async () => {
+            await respondToMessageClaude(childrenTexts, request.message);
+          });
           sendResponse({ success: true, completed: true });
         } catch (error: any) {
           sendResponse({
@@ -1786,160 +1789,378 @@ async function goToTargetClaude(targetText: string): Promise<boolean> {
   return Boolean(results[0]?.result);
 }
 
-async function respondToMessageClaude(childrenIds: string[], message: string) {
-  try {
+async function respondToMessageClaude(childrenTexts: string[], message: string) {
+  // Hardened version: uses tolerant matching, wrapper-scoped textarea lookup, native setter,
+  // semantic button selection, and trusted click via chrome.debugger (same pattern as editMessageClaude)
 
-    if (!Array.isArray(childrenIds)) {
-      throw new Error('childrenIds must be an array');
+  if (!Array.isArray(childrenTexts)) {
+    throw new Error('childrenTexts must be an array');
+  }
+
+  if (typeof message !== 'string') {
+    throw new Error('message must be a string');
+  }
+
+  // Filter out empty/whitespace-only texts
+  const candidateTexts = childrenTexts.filter(text => typeof text === 'string' && text.trim().length > 0);
+  if (candidateTexts.length === 0) {
+    throw new Error('No valid candidate texts provided');
+  }
+
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tabs || tabs.length === 0) {
+    throw new Error('No active tab found');
+  }
+  const currentTab = tabs[0];
+  if (!currentTab.id) {
+    throw new Error('Current tab has no ID');
+  }
+
+  const tabId = currentTab.id;
+  const debuggee = { tabId };
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const stringifyError = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+  const safeDetach = async (context: string) => {
+    try {
+      await chrome.debugger.detach(debuggee);
+    } catch (error) {
+      const message = stringifyError(error).toLowerCase();
+      const expected =
+        message.includes('not attached') || message.includes('no debugger') || message.includes('cannot detach');
+      if (!expected) {
+        debugClaudeNavigation('[respondToMessageClaude] Unexpected detach error:', context, message);
+      }
     }
+  };
 
-    if (typeof message !== 'string') {
-      throw new Error('message must be a string');
-    }
+  const clickAt = async (point: { x: number; y: number }) => {
+    await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: point.x,
+      y: point.y,
+    });
+    await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: point.x,
+      y: point.y,
+      button: 'left',
+      clickCount: 1,
+    });
+    await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: point.x,
+      y: point.y,
+      button: 'left',
+      clickCount: 1,
+    });
+  };
 
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tabs || tabs.length === 0) {
-      throw new Error('No active tab found');
-    }
-    const currentTab = tabs[0];
-    if (!currentTab.id) {
-      throw new Error('Current tab has no ID');
-    }
+  const hoverAt = async (point: { x: number; y: number }) => {
+    await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: point.x,
+      y: point.y,
+    });
+  };
 
-    await chrome.scripting.executeScript({
-      target: { tabId: currentTab.id },
-      func: (childrenIds, message) => {
-        // Helper function to wait for DOM changes with specific state check
+  // Phase 1: Probe to find the target message wrapper and compute click coordinates
+  const respondProbe = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (candidateTexts: string[]) => {
+      const normalizeText = (value: string): string => value.trim().replace(/\s+/g, ' ');
 
-        function findButtons(element: Element | null, maxDepth = 5) {
-          if (!element) {
-            console.log('No element provided to findButtons');
-            return null;
+      const stripMarkdown = (value: string): string =>
+        value
+          .replace(/!\[(.*?)\]\(.*?\)/g, '$1')
+          .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+          .replace(/[*_`~>#-]/g, '');
+
+      const normalizeForMatch = (value: string): string =>
+        normalizeText(
+          stripMarkdown(value)
+            .replace(/[`*_~>]/g, '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/^\d+\.\s*/gm, '')
+            .replace(/^•\s*/gm, '')
+        );
+
+      const getButtonLabel = (button: HTMLButtonElement): string => {
+        const ariaLabel = button.getAttribute('aria-label') || '';
+        const title = button.getAttribute('title') || '';
+        const text = button.textContent || '';
+        return normalizeText([ariaLabel, title, text].filter(Boolean).join(' '));
+      };
+
+      // Find message wrappers that have action buttons
+      const wrappers = Array.from(document.querySelectorAll('div.group')).filter((el) =>
+        el.querySelector('[role="group"][aria-label="Message actions"]')
+      );
+
+      let bestWrapper: Element | null = null;
+      let bestScore = -1;
+      let matchedText: string | null = null;
+
+      // Try to match any of the candidate texts (tolerant matching)
+      for (const candidateText of candidateTexts) {
+        const normalizedCandidateText = normalizeForMatch(candidateText);
+        if (!normalizedCandidateText) continue;
+
+        const headNeedle = normalizedCandidateText.slice(0, 80);
+        const tailNeedle = normalizedCandidateText.slice(-80);
+
+        for (const wrapper of wrappers) {
+          const wrapperText = normalizeForMatch((wrapper as HTMLElement).innerText || wrapper.textContent || '');
+          if (!wrapperText) continue;
+
+          let score = 0;
+          if (wrapperText === normalizedCandidateText) score += 999;
+          if (headNeedle && wrapperText.includes(headNeedle)) score += 2;
+          if (tailNeedle && wrapperText.includes(tailNeedle)) score += 2;
+          // Prefer user messages for respond (these are the child messages we want to edit)
+          if (wrapper.querySelector('[data-testid="user-message"]')) score += 1;
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestWrapper = wrapper;
+            matchedText = candidateText;
           }
-
-          if (maxDepth <= 0) {
-            console.log('Reached maximum depth in findButtons');
-            return null;
-          }
-
-          const buttons = element.querySelectorAll('button');
-
-
-          if (buttons.length > 0) {
-            return Array.from(buttons);
-          }
-
-          return findButtons(element.parentElement, maxDepth - 1);
         }
+      }
 
-        const performResponse = async () => {
+      if (!bestWrapper || bestScore < 2) {
+        return {
+          error: 'No matching message wrapper found for respond',
+          hoverPoint: null,
+          clickPoint: null,
+          matchedText: null
+        };
+      }
 
+      bestWrapper.scrollIntoView({ block: 'center', inline: 'nearest' });
 
-          // Find the first visible message element
-          let element = null;
-          for (const messageId of childrenIds) {
+      const actionGroup = bestWrapper.querySelector('[role="group"][aria-label="Message actions"]');
+      if (!actionGroup) {
+        return {
+          error: 'Message actions group not found under wrapper',
+          hoverPoint: null,
+          clickPoint: null,
+          matchedText: null
+        };
+      }
 
-            const normalizedTargetText = messageId.trim().replace(/\s+/g, ' ');
-            const containers = document.querySelectorAll('.grid-cols-1');
+      const buttons = Array.from(actionGroup.querySelectorAll('button')) as HTMLButtonElement[];
+      const editButton = buttons.find((button) => /edit/i.test(getButtonLabel(button)));
+      if (!editButton) {
+        return {
+          error: 'Edit button not found under message actions group',
+          hoverPoint: null,
+          clickPoint: null,
+          matchedText: null
+        };
+      }
 
+      const wrapperRect = (bestWrapper as HTMLElement).getBoundingClientRect();
+      const buttonRect = editButton.getBoundingClientRect();
 
-            for (const container of containers) {
-              const containerText = container.textContent?.trim().replace(/\s+/g, ' ');
-              if (containerText === normalizedTargetText) {
+      const hoverPoint = {
+        x: wrapperRect.left + Math.min(40, Math.max(5, wrapperRect.width / 2)),
+        y: wrapperRect.top + Math.min(40, Math.max(5, wrapperRect.height / 2)),
+      };
 
-                element = container;
-                break;
-              }
-            }
-            if (element) break;
-          }
+      const clickPoint = {
+        x: buttonRect.left + buttonRect.width / 2,
+        y: buttonRect.top + buttonRect.height / 2,
+      };
 
-          if (!element) {
-            console.error('No visible message element found');
-            throw new Error('No visible message element found');
-          }
+      return { error: null, hoverPoint, clickPoint, matchedText };
+    },
+    args: [candidateTexts],
+  });
 
-          // Find the edit button using the findButtons function
-          const buttons = findButtons(element);
-          if (!buttons) {
-            console.error('No buttons found');
-            throw new Error('No buttons found');
-          }
+  type ProbeResult = {
+    error: string | null;
+    hoverPoint: { x: number; y: number } | null;
+    clickPoint: { x: number; y: number } | null;
+    matchedText: string | null;
+  };
 
-          // Find the edit button (it's usually the first button)
-          const editButton = buttons[0];
-          if (!editButton) {
-            console.error('Edit button not found');
-            throw new Error('Edit button not found');
-          }
+  const probeResult = respondProbe[0]?.result as ProbeResult | undefined;
 
-          editButton.click();
+  if (!probeResult || typeof probeResult !== 'object') {
+    throw new Error('respondToMessageClaude probe returned no result');
+  }
+  if (probeResult.error || !probeResult.hoverPoint || !probeResult.clickPoint) {
+    throw new Error(probeResult.error || 'Could not locate respond click points');
+  }
 
-          // Wait for the new textarea to appear
-          let textArea: HTMLTextAreaElement | null = null;
-          let attempts = 0;
-          const maxAttempts = 10;
+  // Phase 2: Trusted hover+click to open edit mode
+  await safeDetach('pre-attach');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await chrome.debugger.attach(debuggee, '1.3');
+      break;
+    } catch (error) {
+      const errorMessage = stringifyError(error);
+      if (!errorMessage.includes('Another debugger is already attached')) {
+        throw error;
+      }
+      if (attempt === 2) {
+        throw error;
+      }
+      await sleep(200);
+    }
+  }
+  try {
+    await hoverAt(probeResult.hoverPoint);
+    await sleep(100);
+    await clickAt(probeResult.clickPoint);
+    await sleep(150);
+  } finally {
+    await safeDetach('post-click');
+  }
 
-          while (!textArea && attempts < maxAttempts) {
-            // Look for textarea with the specific class pattern
-            textArea = document.querySelector('textarea.bg-bg-000.border.border-border-300') as HTMLTextAreaElement;
-            if (!textArea) {
-              await new Promise(resolve => setTimeout(resolve, 100));
-              attempts++;
-            }
-          }
+  // Phase 3: Fill textarea and submit (scoped to wrapper, native setter, semantic button)
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (originalMessageText, newMessage) => {
+      const normalizeText = (value: string): string => value.trim().replace(/\s+/g, ' ');
 
-          if (!textArea) {
-            console.error('Textarea not found after multiple attempts');
-            throw new Error('Textarea not found after multiple attempts');
-          }
+      const stripMarkdown = (value: string): string =>
+        value
+          .replace(/!\[(.*?)\]\(.*?\)/g, '$1')
+          .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+          .replace(/[*_`~>#-]/g, '');
 
-          textArea.value = message as string;
-          textArea.dispatchEvent(new Event('input', { bubbles: true }));
+      const normalizeForMatch = (value: string): string =>
+        normalizeText(
+          stripMarkdown(value)
+            .replace(/[`*_~>]/g, '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/^\d+\.\s*/gm, '')
+            .replace(/^•\s*/gm, '')
+        );
 
-          // Find the parent element that contains the buttons
-          let buttonContainer: HTMLElement | null = textArea;
-          let iterations = 0;
-          const maxIterations = 5;
+      const isElementVisible = (element: Element): boolean => {
+        const rect = (element as HTMLElement).getBoundingClientRect?.();
+        if (!rect) return true;
+        return rect.width > 0 && rect.height > 0;
+      };
 
-          while (iterations < maxIterations) {
-            buttonContainer = buttonContainer.parentElement;
-            if (!buttonContainer) break;
+      const scoreCandidateTextArea = (candidate: HTMLTextAreaElement, normalizedOriginalText: string): number => {
+        const normalizedValue = normalizeForMatch(candidate.value || '');
+        if (!normalizedValue) return -1;
+        if (normalizedValue === normalizedOriginalText) return 100;
+        const headNeedle = normalizedOriginalText.slice(0, 80);
+        const tailNeedle = normalizedOriginalText.slice(-80);
+        let score = 0;
+        if (headNeedle && normalizedValue.includes(headNeedle)) score += 2;
+        if (tailNeedle && normalizedValue.includes(tailNeedle)) score += 2;
+        return score;
+      };
 
-            const buttons = buttonContainer.querySelectorAll('button');
-            if (buttons.length > 0) {
-              console.log('Found button container');
-              break;
-            }
-            iterations++;
-          }
-
-          if (!buttonContainer) {
-            console.error('Could not find button container');
-            throw new Error('Could not find button container');
-          }
-
-          // Find and click the send button (usually the second button)
-          const sendButton = buttonContainer.querySelectorAll('button')[1];
-          if (!sendButton) {
-            console.error('Send button not found');
-            throw new Error('Send button not found');
-          }
-
-          sendButton.click();
+      const findEditTextArea = async (normalizedOriginalText: string): Promise<HTMLTextAreaElement | null> => {
+        const selector = 'textarea.bg-bg-000.border.border-border-300';
+        const attemptCandidates = (): HTMLTextAreaElement[] => {
+          const all = Array.from(document.querySelectorAll(selector)) as HTMLTextAreaElement[];
+          return all.filter((el) => isElementVisible(el));
         };
 
-        return performResponse().catch(error => {
-          console.error('Error in respondToMessageClaude:', error);
-          throw error;
+        let best: HTMLTextAreaElement | null = null;
+        let bestScore = -1;
+        const maxAttempts = 15;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          for (const candidate of attemptCandidates()) {
+            const score = scoreCandidateTextArea(candidate, normalizedOriginalText);
+            if (score > bestScore) {
+              bestScore = score;
+              best = candidate;
+            }
+          }
+
+          if (best && bestScore >= 2) {
+            return best;
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        return best;
+      };
+
+      const setNativeTextAreaValue = (textArea: HTMLTextAreaElement, value: string) => {
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+        if (descriptor?.set) {
+          descriptor.set.call(textArea, value);
+        } else {
+          textArea.value = value;
+        }
+        textArea.dispatchEvent(new Event('input', { bubbles: true }));
+        textArea.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+
+      const findSubmitButton = (scope: Element): HTMLButtonElement | null => {
+        const byType = scope.querySelector('button[type="submit"]:not([disabled])') as HTMLButtonElement | null;
+        if (byType) return byType;
+
+        const buttons = Array.from(scope.querySelectorAll('button')) as HTMLButtonElement[];
+        const semantic = buttons.find((button) => {
+          if (button.hasAttribute('disabled')) return false;
+          const label = normalizeText(
+            [button.getAttribute('aria-label') || '', button.getAttribute('title') || '', button.textContent || '']
+              .filter(Boolean)
+              .join(' ')
+          );
+          if (!label) return false;
+          if (/cancel|close/i.test(label)) return false;
+          return /save|send|resend|update/i.test(label);
         });
-      },
-      args: [childrenIds, message]
-    });
-  } catch (error) {
-    console.error('respondToMessageClaude failed:', error);
-    throw error;
-  }
+        return semantic || null;
+      };
+
+      const waitForEnabledSubmitButton = async (scope: Element): Promise<HTMLButtonElement | null> => {
+        const maxAttempts = 20;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          const button = findSubmitButton(scope);
+          if (button && !button.hasAttribute('disabled')) {
+            return button;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return null;
+      };
+
+      const performRespond = async () => {
+        const normalizedOriginalText = normalizeForMatch(originalMessageText);
+        const textArea = await findEditTextArea(normalizedOriginalText);
+
+        if (!textArea) {
+          console.error('Textarea not found after multiple attempts');
+          throw new Error('Textarea not found after multiple attempts');
+        }
+
+        setNativeTextAreaValue(textArea, newMessage);
+
+        const form = textArea.closest('form');
+        const submitScope = form || textArea.parentElement || document.body;
+        const sendButton = await waitForEnabledSubmitButton(submitScope);
+        if (!sendButton) {
+          console.error('Send button not found');
+          throw new Error('Send button not found');
+        }
+
+        sendButton.click();
+      };
+
+      return performRespond().catch(error => {
+        console.error('Error in respondToMessageClaude fill+submit:', error);
+        throw error;
+      });
+    },
+    args: [probeResult.matchedText || candidateTexts[0], message]
+  });
 }
 
 async function editMessageClaude(messageText: string, newMessage: string) {
