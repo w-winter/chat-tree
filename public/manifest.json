@@ -15,6 +15,15 @@
         "service_worker": "background.js",
         "type": "module"
     },
+    "commands": {
+        "toggle-panel": {
+            "suggested_key": {
+                "default": "Ctrl+Shift+Y",
+                "mac": "Command+Shift+Y"
+            },
+            "description": "Toggle ChatTree side panel"
+        }
+    },
     "permissions": [
         "storage",
         "tabs",

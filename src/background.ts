@@ -14,6 +14,10 @@ const debugClaudeNavigation = (...args: unknown[]) => {
 
 let claudeNavigationQueue: Promise<void> = Promise.resolve();
 
+// Best-effort in-memory tracking of which tabs currently have the side panel UI loaded
+// This avoids needing async storage reads in "toggle" paths, which can break user-activation gated APIs
+const openSidePanelTabsMemory = new Set<number>();
+
 async function enqueueClaudeNavigation(work: () => Promise<void>) {
   const run = async () => {
     await work();
@@ -98,6 +102,31 @@ function captureClaudeOrgId() {
 // Add message listener to handle requests for headers and conversation history
 chrome.runtime.onMessage.addListener(
   (request, _sender, sendResponse) => {
+    if (request.action === 'sidePanelOpened') {
+      const tabId = request.tabId;
+      if (typeof tabId !== 'number') {
+        sendResponse({ success: false, error: 'Missing tabId' });
+        return;
+      }
+
+      openSidePanelTabsMemory.add(tabId);
+
+      sendResponse({ success: true });
+      return;
+    }
+    else if (request.action === 'sidePanelClosed') {
+      const tabId = request.tabId;
+      if (typeof tabId !== 'number') {
+        sendResponse({ success: false, error: 'Missing tabId' });
+        return;
+      }
+
+      openSidePanelTabsMemory.delete(tabId);
+
+      sendResponse({ success: true });
+      return;
+    }
+
     if (request.action === "getHeaders") {
       loadRequestHeaders().then(headers => {
         sendResponse({ headers });
@@ -2538,6 +2567,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, _info, tab) => {
         tabId,
         enabled: false
       });
+
+      // Cleanup in-memory state for non-supported pages
+      openSidePanelTabsMemory.delete(tabId);
     }
   } catch (error) {
     console.error('Error in onUpdated listener:', error);
@@ -2566,7 +2598,63 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
       tabId: activeInfo.tabId,
       enabled: false
     });
+
+    // Cleanup in-memory state for non-supported pages
+    openSidePanelTabsMemory.delete(activeInfo.tabId);
   }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  openSidePanelTabsMemory.delete(tabId);
+});
+
+chrome.commands.onCommand.addListener((command) => {
+  if (command !== 'toggle-panel') {
+    return;
+  }
+
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tab = tabs[0];
+    if (!tab?.id || !tab.url) {
+      return;
+    }
+
+    const origin = new URL(tab.url).origin;
+    if (origin !== CHATGPT_ORIGIN && origin !== CLAUDE_ORIGIN) {
+      return;
+    }
+
+    const tabId = tab.id;
+
+    if (openSidePanelTabsMemory.has(tabId)) {
+      chrome.runtime.sendMessage({ action: 'closeSidePanel', tabId });
+      openSidePanelTabsMemory.delete(tabId);
+      return;
+    }
+
+    chrome.sidePanel.setOptions({ tabId, path: 'index.html', enabled: true });
+
+    const openPanel = (chrome.sidePanel as any).open;
+    if (typeof openPanel !== 'function') {
+      console.warn('[ChatTree] chrome.sidePanel.open is not available');
+      return;
+    }
+
+    const windowId = tab.windowId;
+
+    if (openPanel.length >= 2) {
+      openPanel({ windowId }, () => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          console.warn('[ChatTree] chrome.sidePanel.open failed:', runtimeError);
+        }
+      });
+      return;
+    }
+
+    void Promise.resolve(openPanel({ windowId }))
+      .catch((error) => console.warn('[ChatTree] chrome.sidePanel.open failed:', error));
+  });
 });
 
 chrome.sidePanel

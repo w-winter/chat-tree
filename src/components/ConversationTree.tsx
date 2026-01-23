@@ -11,6 +11,7 @@ import { calculateSteps } from '../utils/nodeNavigation';
 import { ExportButton } from './ExportButton';
 import { ExportButtonClaude } from './ExportButtonClaude';
 import { CopyButton } from './CopyButton';
+import { ShortcutButton } from './ShortcutButton';
 import { CustomNode } from "./CustomNode";
 import { SearchBar } from './SearchBar';
 import { OpenAIConversationData, ClaudeConversation, ClaudeNode, OpenAINode } from '../types/interfaces';
@@ -398,6 +399,7 @@ const ConversationTree = () => {
             </svg>
           )}
         </button>
+        <ShortcutButton />
         <CopyButton 
           nodes={nodes} 
           onNodeClick={handleNodeClick}
